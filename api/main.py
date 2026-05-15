@@ -44,9 +44,9 @@ class Settings(BaseModel):
     deye_app_id: str = os.getenv("DEYE_APP_ID", "")
     deye_app_secret: str = os.getenv("DEYE_APP_SECRET", "")
     secret_key: str = os.getenv("API_SECRET_KEY", "change_me")
-    feed_in_tariff: float = float(os.getenv("FEED_IN_TARIFF", "0.10"))
-    grid_import_tariff: float = float(os.getenv("GRID_IMPORT_TARIFF", "0.28"))
-    currency: str = os.getenv("CURRENCY", "USD")
+    feed_in_tariff: float = float(os.getenv("FEED_IN_TARIFF", "3.50"))
+    grid_import_tariff: float = float(os.getenv("GRID_IMPORT_TARIFF", "6.00"))
+    currency: str = os.getenv("CURRENCY", "INR")
 
 
 settings = Settings()
@@ -150,6 +150,8 @@ class CollectorStatus(BaseModel):
     last_collection: Optional[str] = None
     buffer_size: int = 0
     inverter_sn: Optional[str] = None
+    billing_kwh: float = 0
+    tariff_rate: float = 0
 
 
 class HealthResult(BaseModel):
@@ -728,6 +730,8 @@ async def collector_status():
         last = await redis.get("collector:last_collection")
         buf = int(await redis.get("deye:buffer:telemetry") or 0)
         sn = await redis.get("deye:inverter_sn") or None
+        bill = float(await redis.get("collector:billing_kwh") or 0)
+        trf = float(await redis.get("collector:tariff_rate") or 0)
         return CollectorStatus(
             status=status,
             collection_count=count,
@@ -735,6 +739,8 @@ async def collector_status():
             last_collection=last,
             buffer_size=buf,
             inverter_sn=sn,
+            billing_kwh=bill,
+            tariff_rate=trf,
         )
     except Exception as e:
         raise HTTPException(500, str(e))

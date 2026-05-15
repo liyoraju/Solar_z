@@ -56,6 +56,8 @@ services:
       - COLLECTOR_INTERVAL=${COLLECTOR_INTERVAL:-10}
       - HISTORY_SYNC_INTERVAL=${HISTORY_SYNC_INTERVAL:-300}
       - BUFFER_MAX_SIZE=${BUFFER_MAX_SIZE:-10000}
+      - TARIFF_MODE=${TARIFF_MODE:-telescopic}
+      - BILLING_DAYS=${BILLING_DAYS:-60}
     depends_on:
       redis:
         condition: service_healthy
@@ -73,8 +75,8 @@ services:
 
   api:
     build:
-      context: ./api
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: api/Dockerfile
     container_name: solar-api
     env_file:
       - .env

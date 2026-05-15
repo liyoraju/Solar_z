@@ -180,9 +180,9 @@ CREATE TABLE IF NOT EXISTS inverters (
 -- Seed default configuration
 -- =============================================
 INSERT INTO system_config (key, value) VALUES
-    ('feed_in_tariff',     '0.10'),
-    ('grid_import_tariff', '0.28'),
-    ('currency',           'USD'),
+    ('feed_in_tariff',     '3.50'),
+    ('grid_import_tariff', '6.00'),
+    ('currency',           'INR'),
     ('collector_status',   'stopped'),
     ('last_collection',    ''),
     ('deye_email',         ''),

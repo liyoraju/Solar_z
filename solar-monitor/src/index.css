@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Morning Theme */
+  --color-morning-bg: #FDF8F0;
+  --color-morning-surface: #FFFFFF;
+  --color-morning-surface-hover: #F5EDE0;
+  --color-morning-border: #E8DDD0;
+  --color-morning-text: #2D2416;
+  --color-morning-text-secondary: #8B7D6B;
+  --color-morning-accent: #E87A2A;
+  --color-morning-accent-light: #FFF0E0;
+  --color-morning-accent-glow: rgba(232, 122, 42, 0.15);
+  --color-morning-chart-grid: #EDE5D8;
+  --color-morning-success: #4CAF50;
+  --color-morning-warning: #FF9800;
+  --color-morning-danger: #F44336;
+  --color-morning-gradient-from: #FFF8F0;
+  --color-morning-gradient-to: #FFF0E0;
+
+  /* Afternoon Theme */
+  --color-afternoon-bg: #F0F4F8;
+  --color-afternoon-surface: #FFFFFF;
+  --color-afternoon-surface-hover: #E8EEF4;
+  --color-afternoon-border: #D0D8E0;
+  --color-afternoon-text: #1A2332;
+  --color-afternoon-text-secondary: #6B7B8B;
+  --color-afternoon-accent: #1A7AE8;
+  --color-afternoon-accent-light: #E0F0FF;
+  --color-afternoon-accent-glow: rgba(26, 122, 232, 0.15);
+  --color-afternoon-chart-grid: #E0E6EC;
+  --color-afternoon-success: #22C55E;
+  --color-afternoon-warning: #F59E0B;
+  --color-afternoon-danger: #EF4444;
+  --color-afternoon-gradient-from: #F0F8FF;
+  --color-afternoon-gradient-to: #E0F0FF;
+
+  /* Evening Theme */
+  --color-evening-bg: #F5F0EB;
+  --color-evening-surface: #FFFFFF;
+  --color-evening-surface-hover: #EDE8E0;
+  --color-evening-border: #D8D0C8;
+  --color-evening-text: #2D2420;
+  --color-evening-text-secondary: #8B7D75;
+  --color-evening-accent: #C45D3A;
+  --color-evening-accent-light: #FFF0E8;
+  --color-evening-accent-glow: rgba(196, 93, 58, 0.15);
+  --color-evening-chart-grid: #E8E0D8;
+  --color-evening-success: #4CAF50;
+  --color-evening-warning: #FF9800;
+  --color-evening-danger: #F44336;
+  --color-evening-gradient-from: #FFF5F0;
+  --color-evening-gradient-to: #FFE8E0;
+
+  /* Night Theme */
+  --color-night-bg: #0F1419;
+  --color-night-surface: #1A2028;
+  --color-night-surface-hover: #252D38;
+  --color-night-border: #2A3440;
+  --color-night-text: #E8EDF2;
+  --color-night-text-secondary: #8B95A5;
+  --color-night-accent: #5BA3F5;
+  --color-night-accent-light: #1A3040;
+  --color-night-accent-glow: rgba(91, 163, 245, 0.2);
+  --color-night-chart-grid: #2A3440;
+  --color-night-success: #4ADE80;
+  --color-night-warning: #FBBF24;
+  --color-night-danger: #F87171;
+  --color-night-gradient-from: #0F1419;
+  --color-night-gradient-to: #1A2535;
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  .glass-morning {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(232, 221, 208, 0.6);
+  }
+  .glass-afternoon {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(208, 216, 224, 0.6);
+  }
+  .glass-evening {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(216, 208, 200, 0.6);
+  }
+  .glass-night {
+    background: rgba(26, 32, 40, 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(42, 52, 64, 0.6);
+  }
+  .animate-pulse-slow {
+    animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  .animate-shimmer {
+    animation: shimmer 2s linear infinite;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}

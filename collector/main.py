@@ -42,8 +42,12 @@ class Cfg:
         "DATABASE_URL",
         "postgresql://solar:solar_secure_2024@postgres:5432/solar_platform",
     )
-    FEED_IN_TARIFF = float(os.getenv("FEED_IN_TARIFF", "0.10"))
-    GRID_IMPORT_TARIFF = float(os.getenv("GRID_IMPORT_TARIFF", "0.28"))
+    FEED_IN_TARIFF = float(os.getenv("FEED_IN_TARIFF", "3.50"))
+    GRID_IMPORT_TARIFF = float(os.getenv("GRID_IMPORT_TARIFF", "6.00"))
+    TARIFF_MODE = os.getenv("TARIFF_MODE", "telescopic")
+    TARIFF_SLABS = os.getenv("TARIFF_SLABS", "50:3.35,100:4.25,150:5.35,200:7.20,250:8.50")
+    TARIFF_NT = os.getenv("TARIFF_NON_TELESCOPIC", "300:6.75,350:7.60,400:7.95,500:8.25,999999:9.20")
+    BILLING_DAYS = int(os.getenv("BILLING_DAYS", "60"))
     ALERT_TEMP_HI = float(os.getenv("ALERT_TEMP_HIGH", "75"))
     ALERT_V_LO = float(os.getenv("ALERT_VOLTAGE_LOW", "180"))
     ALERT_V_HI = float(os.getenv("ALERT_VOLTAGE_HIGH", "264"))
@@ -51,6 +55,28 @@ class Cfg:
     ALERT_F_HI = float(os.getenv("ALERT_FREQ_HIGH", "50.5"))
     ALERT_SOC_LO = float(os.getenv("ALERT_BATTERY_SOC_LOW", "10"))
     ALERT_OFFLINE_S = int(os.getenv("ALERT_OFFLINE_SECONDS", "120"))
+
+    @staticmethod
+    def _parse_slabs(s):
+        slabs = []
+        for part in s.split(","):
+            upper, rate = part.split(":")
+            slabs.append((int(upper), float(rate)))
+        slabs.sort(key=lambda x: x[0])
+        return slabs
+
+    @staticmethod
+    def effective_import_tariff(total_kwh):
+        raw = Cfg.TARIFF_NT if Cfg.TARIFF_MODE == "non_telescopic" else Cfg.TARIFF_SLABS
+        slabs = Cfg._parse_slabs(raw)
+        if not slabs:
+            return Cfg.GRID_IMPORT_TARIFF
+        prev = 0
+        for upper, rate in slabs:
+            if prev < total_kwh <= upper:
+                return rate
+            prev = upper
+        return slabs[-1][1]
 
 
 logging.basicConfig(
@@ -404,7 +430,7 @@ def _float(v: Any) -> Optional[float]:
         return None
 
 
-def normalise(raw: Dict[str, Any], sn: str) -> Dict[str, Any]:
+def normalise(raw: Dict[str, Any], sn: str, import_tariff: Optional[float] = None) -> Dict[str, Any]:
     n: Dict[str, Any] = {
         "time": datetime.now(timezone.utc).isoformat(),
         "inverter_sn": sn,
@@ -420,13 +446,14 @@ def normalise(raw: Dict[str, Any], sn: str) -> Dict[str, Any]:
             n[f] = _float(n[f])
     exp = _float(n.get("daily_grid_export")) or 0
     self_use = (_float(n.get("daily_production")) or 0) - exp
+    effective_import = import_tariff if import_tariff is not None else Cfg.GRID_IMPORT_TARIFF
     n["daily_savings"] = round(
-        exp * Cfg.FEED_IN_TARIFF + self_use * Cfg.GRID_IMPORT_TARIFF, 4
+        exp * Cfg.FEED_IN_TARIFF + self_use * effective_import, 4
     )
     t_exp = _float(n.get("total_grid_export")) or 0
     t_self = (_float(n.get("total_production")) or 0) - t_exp
     n["total_savings"] = round(
-        t_exp * Cfg.FEED_IN_TARIFF + t_self * Cfg.GRID_IMPORT_TARIFF, 2
+        t_exp * Cfg.FEED_IN_TARIFF + t_self * effective_import, 2
     )
     return n
 
@@ -636,6 +663,7 @@ class Collector:
         self.client = DeyeClient(self.session, self.auth)
         self.buf = Buffer(self.rd)
         self.ae = AlertEval(self.rd, self.db)
+        await self._init_billing()
         await self.rd.set("collector:status", "running")
         log.info("Collector ready")
 
@@ -716,6 +744,31 @@ class Collector:
             log.error("store: %s", e)
             await self.buf.push(t)
 
+    async def _init_billing(self):
+        if not await self.rd.exists("consumption:billing:snapshot"):
+            await self.rd.set("consumption:billing:snapshot", "0")
+            await self.rd.set("consumption:billing:cycle_start", datetime.now(timezone.utc).isoformat())
+
+    async def _billing_consumption_kwh(self, total_load: Optional[float]) -> float:
+        if total_load is None:
+            return 0.0
+        snapshot = float(await self.rd.get("consumption:billing:snapshot") or "0")
+        if snapshot <= 0:
+            await self.rd.set("consumption:billing:snapshot", str(total_load))
+            await self.rd.set("consumption:billing:cycle_start", datetime.now(timezone.utc).isoformat())
+            return 0.0
+        cycle_start_str = await self.rd.get("consumption:billing:cycle_start") or ""
+        if cycle_start_str:
+            try:
+                cycle_start = datetime.fromisoformat(cycle_start_str)
+                if (datetime.now(timezone.utc) - cycle_start).days >= Cfg.BILLING_DAYS:
+                    await self.rd.set("consumption:billing:snapshot", str(total_load))
+                    await self.rd.set("consumption:billing:cycle_start", datetime.now(timezone.utc).isoformat())
+                    return 0.0
+            except ValueError:
+                pass
+        return max(0, total_load - snapshot)
+
     async def _flush(self):
         items = await self.buf.drain()
         if not items:
@@ -757,7 +810,10 @@ class Collector:
             return
         self.errors = 0
         sn = raw.get("sn", Cfg.INVERTER_SN or "unknown")
-        t = normalise(raw, sn)
+        total_load = _float(raw.get("eTotalLoad"))
+        billing_kwh = await self._billing_consumption_kwh(total_load)
+        tariff = Cfg.effective_import_tariff(billing_kwh)
+        t = normalise(raw, sn, import_tariff=tariff)
         await self.rd.set(f"telemetry:latest:{sn}", json.dumps(t), ex=120)
         await self.rd.publish(f"telemetry:realtime:{sn}", json.dumps(t))
         await self._store(t)
@@ -773,15 +829,14 @@ class Collector:
         temp = t.get("inverter_temperature")
         log.info(
             "PV=%.0fW Grid=%+.0fW Load=%.0fW Today=%.1fkWh Temp=%s",
-            pv,
-            grid,
-            load,
-            day,
+            pv, grid, load, day,
             f"{temp}°C" if temp else "N/A",
         )
         await self.rd.set("collector:last_collection", t["time"])
         await self.rd.set("collector:collection_count", str(self.count))
         await self.rd.set("collector:error_count", str(self.errors))
+        await self.rd.set("collector:billing_kwh", str(billing_kwh))
+        await self.rd.set("collector:tariff_rate", str(tariff))
 
     async def _sync_history(self):
         log.info("History sync…")
@@ -792,7 +847,10 @@ class Collector:
         if data:
             log.info("History: %d records", len(data))
             for r in data:
-                t = normalise(r, Cfg.INVERTER_SN or r.get("sn", "unknown"))
+                total_h = _float(r.get("eTotalLoad"))
+                billing_h = await self._billing_consumption_kwh(total_h)
+                tariff_h = Cfg.effective_import_tariff(billing_h)
+                t = normalise(r, Cfg.INVERTER_SN or r.get("sn", "unknown"), import_tariff=tariff_h)
                 if "time" in r and r["time"]:
                     try:
                         t["time"] = datetime.fromtimestamp(
