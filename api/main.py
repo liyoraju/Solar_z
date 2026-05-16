@@ -161,6 +161,24 @@ class HealthResult(BaseModel):
     uptime: float = 0
 
 
+class TariffSlab(BaseModel):
+    upper_kwh: int
+    rate: float
+
+
+class TariffConfig(BaseModel):
+    mode: str = "telescopic"
+    slabs: List[TariffSlab] = []
+    non_telescopic_slabs: List[TariffSlab] = []
+    billing_days: int = 60
+    feed_in_tariff: float = 3.50
+    grid_import_tariff: float = 6.00
+    currency: str = "INR"
+    billing_kwh: float = 0
+    cycle_start: Optional[str] = None
+    active_rate: float = 0
+
+
 class AckResponse(BaseModel):
     success: bool
 
@@ -432,6 +450,63 @@ async def telemetry_monthly(sn: Optional[str] = None, months: int = Query(12, le
         raise HTTPException(500, str(e))
 
 
+class MonthlyStats(BaseModel):
+    month: str
+    monthly_production_kwh: float = 0
+    monthly_savings: float = 0
+    total_grid_export_kwh: float = 0
+    total_grid_import_kwh: float = 0
+    total_load_kwh: float = 0
+    avg_inverter_power: Optional[float] = None
+    peak_inverter_power: Optional[float] = None
+    max_temperature: Optional[float] = None
+    sample_count: Optional[int] = None
+    self_consumption_pct: float = 0
+
+
+@app.get("/api/analytics/monthly", response_model=List[MonthlyStats])
+async def analytics_monthly(months: int = Query(12, le=60)):
+    try:
+        async with db_pool.acquire() as c:
+            rows = await c.fetch(
+                """SELECT month::text,
+                          monthly_production_kwh,
+                          monthly_savings,
+                          total_grid_export_kwh,
+                          total_grid_import_kwh,
+                          total_load_kwh,
+                          avg_inverter_power,
+                          peak_inverter_power,
+                          max_temperature,
+                          sample_count
+                   FROM telemetry_monthly_deltas
+                   WHERE month >= NOW() - ($1 || ' months')::INTERVAL
+                   ORDER BY month DESC""",
+                str(months),
+            )
+            result = []
+            for r in rows:
+                prod = r["monthly_production_kwh"] or 0
+                export = r["total_grid_export_kwh"] or 0
+                self_consumption = round((prod - export) / prod * 100, 1) if prod > 0 else 0
+                result.append(MonthlyStats(
+                    month=r["month"],
+                    monthly_production_kwh=round(prod, 2),
+                    monthly_savings=round(r["monthly_savings"] or 0, 2),
+                    total_grid_export_kwh=round(export, 2),
+                    total_grid_import_kwh=round(r["total_grid_import_kwh"] or 0, 2),
+                    total_load_kwh=round(r["total_load_kwh"] or 0, 2),
+                    avg_inverter_power=r["avg_inverter_power"],
+                    peak_inverter_power=r["peak_inverter_power"],
+                    max_temperature=r["max_temperature"],
+                    sample_count=r["sample_count"],
+                    self_consumption_pct=self_consumption,
+                ))
+            return result
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
 # ---------------------------------------------------------------------------
 # Analytics / Overview
 # ---------------------------------------------------------------------------
@@ -479,12 +554,12 @@ async def analytics_financial():
         async with db_pool.acquire() as c:
             row = await c.fetchrow("""
                 SELECT
-                    MAX(total_production) AS total_kwh,
-                    MAX(total_grid_export) AS total_export_kwh,
-                    MAX(total_grid_import) AS total_import_kwh,
-                    MAX(total_savings) AS total_savings,
-                    MAX(daily_production) AS today_kwh,
-                    MAX(daily_savings) AS today_savings
+                    total_production AS total_kwh,
+                    total_grid_export AS total_export_kwh,
+                    total_grid_import AS total_import_kwh,
+                    total_savings AS total_savings,
+                    daily_production AS today_kwh,
+                    daily_savings AS today_savings
                 FROM telemetry ORDER BY time DESC LIMIT 1
             """)
             if not row:
@@ -620,6 +695,67 @@ async def set_config(body: ConfigUpdate):
             if body.key in ("deye_email", "deye_password_enc", "deye_inverter_sn"):
                 await redis.set("collector:command", "restart")
             return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/config/tariff", response_model=Dict[str, bool])
+async def set_tariff_config(body: TariffConfig):
+    try:
+        await redis.set("cfg:tariff_mode", body.mode)
+        slabs_str = ",".join(f"{s.upper_kwh}:{s.rate}" for s in body.slabs) if body.slabs else ""
+        await redis.set("cfg:tariff_slabs", slabs_str)
+        nt_slabs_str = ",".join(f"{s.upper_kwh}:{s.rate}" for s in body.non_telescopic_slabs) if body.non_telescopic_slabs else ""
+        await redis.set("cfg:tariff_non_telescopic", nt_slabs_str)
+        await redis.set("cfg:billing_days", str(body.billing_days))
+        await redis.set("cfg:feed_in_tariff", str(body.feed_in_tariff))
+        await redis.set("cfg:grid_import_tariff", str(body.grid_import_tariff))
+        await redis.set("cfg:currency", body.currency)
+        await redis.set("collector:command", "restart")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+def _parse_slabs(s: str):
+    if not s:
+        return []
+    slabs = []
+    for part in s.split(","):
+        try:
+            upper, rate = part.split(":")
+            slabs.append({"upper_kwh": int(upper), "rate": float(rate)})
+        except ValueError:
+            continue
+    slabs.sort(key=lambda x: x["upper_kwh"])
+    return slabs
+
+
+@app.get("/api/config/tariff", response_model=TariffConfig)
+async def get_tariff_config():
+    try:
+        mode = (await redis.get("cfg:tariff_mode")) or "telescopic"
+        slabs_raw = (await redis.get("cfg:tariff_slabs")) or "50:3.35,100:4.25,150:5.35,200:7.20,250:8.50"
+        nt_raw = (await redis.get("cfg:tariff_non_telescopic")) or "300:6.75,350:7.60,400:7.95,500:8.25,999999:9.20"
+        billing_days = int((await redis.get("cfg:billing_days")) or "60")
+        feed_in = float((await redis.get("cfg:feed_in_tariff")) or settings.feed_in_tariff)
+        grid_import = float((await redis.get("cfg:grid_import_tariff")) or settings.grid_import_tariff)
+        currency = (await redis.get("cfg:currency")) or settings.currency
+        billing_kwh = float(await redis.get("collector:billing_kwh") or "0")
+        cycle_start = await redis.get("consumption:billing:cycle_start")
+        active_rate = float(await redis.get("collector:tariff_rate") or "0")
+        return TariffConfig(
+            mode=mode,
+            slabs=_parse_slabs(slabs_raw),
+            non_telescopic_slabs=_parse_slabs(nt_raw),
+            billing_days=billing_days,
+            feed_in_tariff=feed_in,
+            grid_import_tariff=grid_import,
+            currency=currency,
+            billing_kwh=round(billing_kwh, 2),
+            cycle_start=cycle_start,
+            active_rate=active_rate,
+        )
     except Exception as e:
         raise HTTPException(500, str(e))
 

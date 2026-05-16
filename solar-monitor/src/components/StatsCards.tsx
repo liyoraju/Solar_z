@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, TrendingUp, TrendingDown, Thermometer, Activity, Sun, ArrowUpRight } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, Activity, Sun, ArrowUpRight } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { useOverview } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -81,13 +81,11 @@ export const StatsCards: React.FC = () => {
   const pv2Power = telemetry?.pv2_power ?? 0;
   const totalPv = pv1Power + pv2Power;
   const loadPower = telemetry?.load_power ?? overview?.load_power ?? 0;
-  const temp = telemetry?.inverter_temperature ?? overview?.temperature ?? 0;
   const dailyProd = telemetry?.daily_production ?? overview?.daily_production ?? 0;
   const dailySavings = telemetry?.daily_savings ?? overview?.daily_savings ?? 0;
-  const gridPower = telemetry?.grid_power ?? overview?.grid_power ?? 0;
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
       <StatCard
         title="PV Power"
         value={formatNumber(totalPv, 0)}
@@ -107,15 +105,6 @@ export const StatsCards: React.FC = () => {
         bgColor={accentColors.bg}
       />
       <StatCard
-        title="Temperature"
-        value={formatNumber(temp, 1)}
-        unit="°C"
-        icon={<Thermometer className={`w-5 h-5 ${accentColors.primary}`} />}
-        trend={temp > 50 ? -2.1 : 1.5}
-        color={accentColors.primary}
-        bgColor={accentColors.bg}
-      />
-      <StatCard
         title="Daily Production"
         value={formatNumber(dailyProd, 2)}
         unit="kWh"
@@ -130,15 +119,6 @@ export const StatsCards: React.FC = () => {
         value={formatCurrency(dailySavings, 'INR')}
         icon={<TrendingUp className={`w-5 h-5 ${accentColors.primary}`} />}
         trend={15.2}
-        color={accentColors.primary}
-        bgColor={accentColors.bg}
-      />
-      <StatCard
-        title="Grid Power"
-        value={formatNumber(Math.abs(gridPower), 0)}
-        unit="W"
-        icon={<Activity className={`w-5 h-5 ${accentColors.primary}`} />}
-        trendLabel={gridPower >= 0 ? 'Exporting' : 'Importing'}
         color={accentColors.primary}
         bgColor={accentColors.bg}
       />

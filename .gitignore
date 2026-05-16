@@ -10,3 +10,6 @@ wheels/
 .venv
 .env
 venv/
+.opencode/
+graphify-out/
+AGENTS.md

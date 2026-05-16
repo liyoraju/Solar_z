@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTheme } from '../hooks/useTheme';
-import { useFinancial, useOverview } from '../hooks/useApi';
+import { useFinancial, useOverview, useTariffConfig } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { formatNumber, formatCurrency } from '../utils/helpers';
 import { IndianRupee, TrendingUp, Leaf, Zap, ArrowUpRight, ArrowDownRight, BarChart3 } from 'lucide-react';
@@ -10,6 +10,7 @@ export const FinancialOverview: React.FC = () => {
   const financial = useFinancial();
   const { data: overview } = useOverview();
   const { telemetry } = useWebSocket();
+  const tariffConfig = useTariffConfig();
 
   const accentColor = {
     morning: 'text-orange-500',
@@ -30,9 +31,10 @@ export const FinancialOverview: React.FC = () => {
   const totalSavings = telemetry?.total_savings ?? financial?.total_savings ?? overview?.total_savings ?? 0;
   const todaySavings = telemetry?.daily_savings ?? financial?.today_savings ?? overview?.daily_savings ?? 0;
   const co2 = financial?.co2_avoided_tonnes ?? (totalProd / 1000 * 0.42);
-  const currency = financial?.currency ?? 'INR';
-  const feedIn = financial?.feed_in_tariff ?? 3.5;
-  const importTariff = financial?.grid_import_tariff ?? 6.0;
+  const currency = tariffConfig?.currency ?? financial?.currency ?? 'INR';
+  const feedIn = tariffConfig?.feed_in_tariff ?? financial?.feed_in_tariff ?? 3.5;
+  const importTariff = tariffConfig?.active_rate ?? financial?.grid_import_tariff ?? 6.0;
+  const tariffMode = tariffConfig?.mode ?? 'telescopic';
 
   return (
     <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-4 sm:p-6`}>
@@ -82,6 +84,14 @@ export const FinancialOverview: React.FC = () => {
             <div>
               <p className={`text-[10px] ${themeColors.textSecondary}`}>Import Tariff</p>
               <p className={`text-sm font-bold ${themeColors.text}`}>{formatCurrency(importTariff, currency)}/kWh</p>
+            </div>
+          </div>
+          <div className="w-px h-8 bg-current opacity-10 hidden sm:block" />
+          <div className="hidden sm:flex items-center gap-2">
+            <Zap className={`w-4 h-4 ${accentColor}`} />
+            <div>
+              <p className={`text-[10px] ${themeColors.textSecondary}`}>Mode</p>
+              <p className={`text-sm font-bold ${themeColors.text} capitalize`}>{tariffMode === 'telescopic' ? 'Slab-wise' : 'Non-telescopic'}</p>
             </div>
           </div>
         </div>

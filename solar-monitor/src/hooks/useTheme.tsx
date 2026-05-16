@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 
 export type TimeOfDay = 'morning' | 'afternoon' | 'evening' | 'night';
 
@@ -6,6 +6,10 @@ interface ThemeContextType {
   timeOfDay: TimeOfDay;
   currentTime: Date;
   themeColors: ThemeColors;
+  activeTheme: TimeOfDay;
+  setTheme: (theme: TimeOfDay) => void;
+  isAutoTheme: boolean;
+  setIsAutoTheme: (auto: boolean) => void;
 }
 
 export interface ThemeColors {
@@ -115,31 +119,76 @@ function getTimeOfDay(date: Date): TimeOfDay {
   return 'night';
 }
 
+const themeLabels: Record<TimeOfDay, string> = {
+  morning: 'Morning',
+  afternoon: 'Afternoon',
+  evening: 'Evening',
+  night: 'Night',
+};
+
+const themeIcons: Record<TimeOfDay, string> = {
+  morning: '🌅',
+  afternoon: '☀️',
+  evening: '🌇',
+  night: '🌙',
+};
+
 const ThemeContext = createContext<ThemeContextType>({
   timeOfDay: 'morning',
   currentTime: new Date(),
   themeColors: themeMap.morning,
+  activeTheme: 'morning',
+  setTheme: () => {},
+  isAutoTheme: true,
+  setIsAutoTheme: () => {},
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [timeOfDay, setTimeOfDay] = useState<TimeOfDay>(getTimeOfDay(new Date()));
+  const [autoTimeOfDay, setAutoTimeOfDay] = useState<TimeOfDay>(getTimeOfDay(new Date()));
+  const [isAutoTheme, setIsAutoTheme] = useState(() => {
+    const stored = localStorage.getItem('theme:auto');
+    return stored !== null ? stored === 'true' : true;
+  });
+  const [manualTheme, setManualTheme] = useState<TimeOfDay>(() => {
+    const stored = localStorage.getItem('theme:manual') as TimeOfDay | null;
+    return stored || 'morning';
+  });
 
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date();
       setCurrentTime(now);
-      setTimeOfDay(getTimeOfDay(now));
+      setAutoTimeOfDay(getTimeOfDay(now));
     }, 60000);
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem('theme:auto', String(isAutoTheme));
+  }, [isAutoTheme]);
+
+  useEffect(() => {
+    localStorage.setItem('theme:manual', manualTheme);
+  }, [manualTheme]);
+
+  const setTheme = useCallback((theme: TimeOfDay) => {
+    setManualTheme(theme);
+    setIsAutoTheme(false);
+  }, []);
+
+  const activeTheme = isAutoTheme ? autoTimeOfDay : manualTheme;
+
   return (
     <ThemeContext.Provider
       value={{
-        timeOfDay,
+        timeOfDay: activeTheme,
         currentTime,
-        themeColors: themeMap[timeOfDay],
+        themeColors: themeMap[activeTheme],
+        activeTheme,
+        setTheme,
+        isAutoTheme,
+        setIsAutoTheme,
       }}
     >
       {children}
@@ -150,3 +199,5 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 export function useTheme() {
   return useContext(ThemeContext);
 }
+
+export { themeMap, themeLabels, themeIcons };

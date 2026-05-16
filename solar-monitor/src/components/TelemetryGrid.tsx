@@ -87,9 +87,6 @@ export const TelemetryGrid: React.FC = () => {
           <TelemetryItem label="PV1 Voltage" value={t?.pv1_voltage} unit="V" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={1} />
           <TelemetryItem label="PV1 Current" value={t?.pv1_current} unit="A" icon={<Gauge className={`w-4 h-4 ${accentColor}`} />} decimals={2} />
           <TelemetryItem label="PV1 Power" value={t?.pv1_power} unit="W" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={0} highlight />
-          <TelemetryItem label="PV2 Voltage" value={t?.pv2_voltage} unit="V" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={1} />
-          <TelemetryItem label="PV2 Current" value={t?.pv2_current} unit="A" icon={<Gauge className={`w-4 h-4 ${accentColor}`} />} decimals={2} />
-          <TelemetryItem label="PV2 Power" value={t?.pv2_power} unit="W" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={0} highlight />
         </div>
       </div>
 
@@ -101,11 +98,7 @@ export const TelemetryGrid: React.FC = () => {
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           <TelemetryItem label="Grid Voltage R" value={t?.grid_voltage_r} unit="V" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={1} />
-          <TelemetryItem label="Grid Voltage S" value={t?.grid_voltage_s} unit="V" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={1} />
-          <TelemetryItem label="Grid Voltage T" value={t?.grid_voltage_t} unit="V" icon={<Zap className={`w-4 h-4 ${accentColor}`} />} decimals={1} />
           <TelemetryItem label="Grid Current R" value={t?.grid_current_r} unit="A" icon={<Gauge className={`w-4 h-4 ${accentColor}`} />} decimals={2} />
-          <TelemetryItem label="Grid Current S" value={t?.grid_current_s} unit="A" icon={<Gauge className={`w-4 h-4 ${accentColor}`} />} decimals={2} />
-          <TelemetryItem label="Grid Current T" value={t?.grid_current_t} unit="A" icon={<Gauge className={`w-4 h-4 ${accentColor}`} />} decimals={2} />
           <TelemetryItem label="Grid Frequency" value={t?.grid_frequency} unit="Hz" icon={<Activity className={`w-4 h-4 ${accentColor}`} />} decimals={2} highlight />
         </div>
       </div>

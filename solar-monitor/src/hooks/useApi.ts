@@ -101,10 +101,112 @@ export function useFinancial() {
           total_savings: 64500,
           today_production_kwh: 26.4,
           today_savings: 92.4,
-          feed_in_tariff: 3.5,
-          grid_import_tariff: 6.0,
+          feed_in_tariff: 0,
+          grid_import_tariff: 0,
           currency: 'INR',
           co2_avoided_tonnes: 7.75,
+        });
+      }
+    };
+    fetchData();
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return data;
+}
+
+export interface TariffSlab {
+  upper_kwh: number;
+  rate: number;
+}
+
+export interface TariffConfig {
+  mode: string;
+  slabs: TariffSlab[];
+  non_telescopic_slabs: TariffSlab[];
+  billing_days: number;
+  feed_in_tariff: number;
+  grid_import_tariff: number;
+  currency: string;
+  billing_kwh: number;
+  cycle_start: string | null;
+  active_rate: number;
+}
+
+export interface MonthlyStats {
+  month: string;
+  monthly_production_kwh: number;
+  monthly_savings: number;
+  total_grid_export_kwh: number;
+  total_grid_import_kwh: number;
+  total_load_kwh: number;
+  avg_inverter_power: number | null;
+  peak_inverter_power: number | null;
+  max_temperature: number | null;
+  sample_count: number | null;
+  self_consumption_pct: number;
+}
+
+export function useMonthlyStats(months: number = 3) {
+  const [data, setData] = useState<MonthlyStats[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const res = await fetch(`/api/analytics/monthly?months=${months}`);
+        if (res.ok) {
+          const json = await res.json();
+          setData(json);
+        }
+      } catch {
+        setData([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, [months]);
+
+  return { data, loading };
+}
+
+export function useTariffConfig() {
+  const [data, setData] = useState<TariffConfig | null>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const res = await fetch('/api/config/tariff');
+        if (res.ok) {
+          const json = await res.json();
+          setData(json);
+        }
+      } catch {
+        setData({
+          mode: 'telescopic',
+          slabs: [
+            { upper_kwh: 50, rate: 3.35 },
+            { upper_kwh: 100, rate: 4.25 },
+            { upper_kwh: 150, rate: 5.35 },
+            { upper_kwh: 200, rate: 7.20 },
+            { upper_kwh: 250, rate: 8.50 },
+          ],
+          non_telescopic_slabs: [
+            { upper_kwh: 300, rate: 6.75 },
+            { upper_kwh: 350, rate: 7.60 },
+            { upper_kwh: 400, rate: 7.95 },
+            { upper_kwh: 500, rate: 8.25 },
+            { upper_kwh: 999999, rate: 9.20 },
+          ],
+          billing_days: 60,
+          feed_in_tariff: 3.50,
+          grid_import_tariff: 6.00,
+          currency: 'INR',
+          billing_kwh: 0,
+          cycle_start: null,
+          active_rate: 3.35,
         });
       }
     };

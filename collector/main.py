@@ -78,6 +78,34 @@ class Cfg:
             prev = upper
         return slabs[-1][1]
 
+    @staticmethod
+    async def load_tariff_from_redis(rd: aioredis.Redis) -> dict:
+        mode = (await rd.get("cfg:tariff_mode")) or Cfg.TARIFF_MODE
+        slabs_str = (await rd.get("cfg:tariff_slabs")) or Cfg.TARIFF_SLABS
+        nt_str = (await rd.get("cfg:tariff_non_telescopic")) or Cfg.TARIFF_NT
+        feed_in = float((await rd.get("cfg:feed_in_tariff")) or Cfg.FEED_IN_TARIFF)
+        billing_days = int((await rd.get("cfg:billing_days")) or Cfg.BILLING_DAYS)
+        return {
+            "mode": mode,
+            "slabs_str": slabs_str,
+            "nt_str": nt_str,
+            "feed_in_tariff": feed_in,
+            "billing_days": billing_days,
+        }
+
+    @staticmethod
+    def effective_import_tariff_dynamic(total_kwh: float, tariff_cfg: dict) -> float:
+        raw = tariff_cfg["nt_str"] if tariff_cfg["mode"] == "non_telescopic" else tariff_cfg["slabs_str"]
+        slabs = Cfg._parse_slabs(raw)
+        if not slabs:
+            return Cfg.GRID_IMPORT_TARIFF
+        prev = 0
+        for upper, rate in slabs:
+            if prev < total_kwh <= upper:
+                return rate
+            prev = upper
+        return slabs[-1][1]
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -430,7 +458,7 @@ def _float(v: Any) -> Optional[float]:
         return None
 
 
-def normalise(raw: Dict[str, Any], sn: str, import_tariff: Optional[float] = None) -> Dict[str, Any]:
+def normalise(raw: Dict[str, Any], sn: str, import_tariff: Optional[float] = None, feed_in_tariff: Optional[float] = None) -> Dict[str, Any]:
     n: Dict[str, Any] = {
         "time": datetime.now(timezone.utc).isoformat(),
         "inverter_sn": sn,
@@ -447,13 +475,14 @@ def normalise(raw: Dict[str, Any], sn: str, import_tariff: Optional[float] = Non
     exp = _float(n.get("daily_grid_export")) or 0
     self_use = (_float(n.get("daily_production")) or 0) - exp
     effective_import = import_tariff if import_tariff is not None else Cfg.GRID_IMPORT_TARIFF
+    fit = feed_in_tariff if feed_in_tariff is not None else Cfg.FEED_IN_TARIFF
     n["daily_savings"] = round(
-        exp * Cfg.FEED_IN_TARIFF + self_use * effective_import, 4
+        exp * fit + self_use * effective_import, 4
     )
     t_exp = _float(n.get("total_grid_export")) or 0
     t_self = (_float(n.get("total_production")) or 0) - t_exp
     n["total_savings"] = round(
-        t_exp * Cfg.FEED_IN_TARIFF + t_self * effective_import, 2
+        t_exp * fit + t_self * effective_import, 2
     )
     return n
 
@@ -748,6 +777,16 @@ class Collector:
         if not await self.rd.exists("consumption:billing:snapshot"):
             await self.rd.set("consumption:billing:snapshot", "0")
             await self.rd.set("consumption:billing:cycle_start", datetime.now(timezone.utc).isoformat())
+        if not await self.rd.exists("cfg:tariff_mode"):
+            await self.rd.set("cfg:tariff_mode", Cfg.TARIFF_MODE)
+        if not await self.rd.exists("cfg:tariff_slabs"):
+            await self.rd.set("cfg:tariff_slabs", Cfg.TARIFF_SLABS)
+        if not await self.rd.exists("cfg:tariff_non_telescopic"):
+            await self.rd.set("cfg:tariff_non_telescopic", Cfg.TARIFF_NT)
+        if not await self.rd.exists("cfg:billing_days"):
+            await self.rd.set("cfg:billing_days", str(Cfg.BILLING_DAYS))
+        if not await self.rd.exists("cfg:feed_in_tariff"):
+            await self.rd.set("cfg:feed_in_tariff", str(Cfg.FEED_IN_TARIFF))
 
     async def _billing_consumption_kwh(self, total_load: Optional[float]) -> float:
         if total_load is None:
@@ -758,10 +797,11 @@ class Collector:
             await self.rd.set("consumption:billing:cycle_start", datetime.now(timezone.utc).isoformat())
             return 0.0
         cycle_start_str = await self.rd.get("consumption:billing:cycle_start") or ""
+        billing_days = int((await self.rd.get("cfg:billing_days")) or Cfg.BILLING_DAYS)
         if cycle_start_str:
             try:
                 cycle_start = datetime.fromisoformat(cycle_start_str)
-                if (datetime.now(timezone.utc) - cycle_start).days >= Cfg.BILLING_DAYS:
+                if (datetime.now(timezone.utc) - cycle_start).days >= billing_days:
                     await self.rd.set("consumption:billing:snapshot", str(total_load))
                     await self.rd.set("consumption:billing:cycle_start", datetime.now(timezone.utc).isoformat())
                     return 0.0
@@ -812,8 +852,9 @@ class Collector:
         sn = raw.get("sn", Cfg.INVERTER_SN or "unknown")
         total_load = _float(raw.get("eTotalLoad"))
         billing_kwh = await self._billing_consumption_kwh(total_load)
-        tariff = Cfg.effective_import_tariff(billing_kwh)
-        t = normalise(raw, sn, import_tariff=tariff)
+        tariff_cfg = await Cfg.load_tariff_from_redis(self.rd)
+        tariff = Cfg.effective_import_tariff_dynamic(billing_kwh, tariff_cfg)
+        t = normalise(raw, sn, import_tariff=tariff, feed_in_tariff=tariff_cfg["feed_in_tariff"])
         await self.rd.set(f"telemetry:latest:{sn}", json.dumps(t), ex=120)
         await self.rd.publish(f"telemetry:realtime:{sn}", json.dumps(t))
         await self._store(t)
@@ -846,11 +887,12 @@ class Collector:
         )
         if data:
             log.info("History: %d records", len(data))
+            tariff_cfg = await Cfg.load_tariff_from_redis(self.rd)
             for r in data:
                 total_h = _float(r.get("eTotalLoad"))
                 billing_h = await self._billing_consumption_kwh(total_h)
-                tariff_h = Cfg.effective_import_tariff(billing_h)
-                t = normalise(r, Cfg.INVERTER_SN or r.get("sn", "unknown"), import_tariff=tariff_h)
+                tariff_h = Cfg.effective_import_tariff_dynamic(billing_h, tariff_cfg)
+                t = normalise(r, Cfg.INVERTER_SN or r.get("sn", "unknown"), import_tariff=tariff_h, feed_in_tariff=tariff_cfg["feed_in_tariff"])
                 if "time" in r and r["time"]:
                     try:
                         t["time"] = datetime.fromtimestamp(

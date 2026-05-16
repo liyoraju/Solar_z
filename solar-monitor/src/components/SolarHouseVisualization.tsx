@@ -11,8 +11,7 @@ export const SolarHouseVisualization: React.FC = () => {
   const { data: overview } = useOverview();
 
   const pv1Power = telemetry?.pv1_power ?? 0;
-  const pv2Power = telemetry?.pv2_power ?? 0;
-  const totalPv = pv1Power + pv2Power;
+  const totalPv = pv1Power;
   const loadPower = telemetry?.load_power ?? overview?.load_power ?? 0;
   const gridPower = telemetry?.grid_power ?? overview?.grid_power ?? 0;
 
@@ -59,9 +58,6 @@ export const SolarHouseVisualization: React.FC = () => {
           <div className="text-center">
             <p className={`text-xs ${themeColors.textSecondary}`}>Solar Generation</p>
             <p className={`text-xl font-bold ${themeColors.text}`}>{formatNumber(totalPv, 0)} W</p>
-            <p className={`text-[10px] ${themeColors.textSecondary}`}>
-              PV1: {formatNumber(pv1Power, 0)}W · PV2: {formatNumber(pv2Power, 0)}W
-            </p>
           </div>
         </div>
 

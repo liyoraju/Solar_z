@@ -5,12 +5,12 @@ import {
   PieChart, Pie, Cell, Legend, ReferenceLine
 } from 'recharts';
 import { useTheme } from '../hooks/useTheme';
-import { useHourlyHistory, useHistory } from '../hooks/useApi';
+import { useHourlyHistory, useHistory, useMonthlyStats } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { formatNumber } from '../utils/helpers';
+import { formatNumber, formatCurrency } from '../utils/helpers';
 import { TrendingUp, Calendar, Clock, BarChart3, PieChart as PieIcon, Activity } from 'lucide-react';
 
-type ChartTab = 'hourly' | 'daily' | 'production' | 'distribution';
+type ChartTab = 'hourly' | 'daily' | 'monthly' | 'production' | 'distribution';
 
 const CustomTooltip: React.FC<any> = ({ active, payload, label, unit = '' }) => {
   const { themeColors } = useTheme();
@@ -37,6 +37,7 @@ export const ChartsSection: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ChartTab>('hourly');
   const hourlyData = useHourlyHistory();
   const dailyData = useHistory(14);
+  const monthlyData = useMonthlyStats(12);
   const { telemetry } = useWebSocket();
 
   const accentColor = {
@@ -70,11 +71,28 @@ export const ChartsSection: React.FC = () => {
     savings: d.daily_savings || 0,
   }));
 
+  // Monthly production data
+  const monthlyChartData = monthlyData.data
+    .slice()
+    .reverse()
+    .map(d => {
+      const monthLabel = new Date(d.month + '-01').toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+      return {
+        month: monthLabel,
+        production: d.monthly_production_kwh,
+        savings: d.monthly_savings,
+        export: d.total_grid_export_kwh,
+        import: d.total_grid_import_kwh,
+        selfConsumption: d.self_consumption_pct,
+      };
+    });
+
+  const hasMonthlyData = monthlyChartData.length >= 2 && monthlyChartData.some(d => d.production > 0 || d.export > 0 || d.import > 0);
+
   // Power distribution
-  const totalPv = (telemetry?.pv1_power || 0) + (telemetry?.pv2_power || 0);
+  const totalPv = (telemetry?.pv1_power || 0);
   const distributionData = [
     { name: 'PV1 Power', value: telemetry?.pv1_power || 0, color: accentColor },
-    { name: 'PV2 Power', value: telemetry?.pv2_power || 0, color: secondaryColor },
     { name: 'Load Power', value: telemetry?.load_power || 0, color: '#22C55E' },
     { name: 'Grid Export', value: Math.max(0, telemetry?.daily_grid_export || 0), color: '#F59E0B' },
   ].filter(d => d.value > 0);
@@ -82,6 +100,7 @@ export const ChartsSection: React.FC = () => {
   const tabs: { key: ChartTab; label: string; icon: React.ReactNode }[] = [
     { key: 'hourly', label: 'Hourly', icon: <Clock className="w-4 h-4" /> },
     { key: 'daily', label: 'Daily', icon: <Calendar className="w-4 h-4" /> },
+    { key: 'monthly', label: 'Monthly', icon: <BarChart3 className="w-4 h-4" /> },
     { key: 'production', label: 'Production', icon: <Activity className="w-4 h-4" /> },
     { key: 'distribution', label: 'Distribution', icon: <PieIcon className="w-4 h-4" /> },
   ];
@@ -111,7 +130,7 @@ export const ChartsSection: React.FC = () => {
         </div>
       </div>
 
-      <div className="h-[300px] sm:h-[400px]">
+      <div className="h-[250px] sm:h-[350px] md:h-[400px]">
         <ResponsiveContainer width="100%" height="100%">
           {activeTab === 'hourly' && (
             <AreaChart data={hourlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
@@ -202,6 +221,60 @@ export const ChartsSection: React.FC = () => {
                 iconSize={8}
               />
             </BarChart>
+          )}
+
+          {activeTab === 'monthly' && (
+            !hasMonthlyData ? (
+              <div className="flex flex-col items-center justify-center h-full">
+                <BarChart3 className={`w-12 h-12 ${themeColors.textSecondary} opacity-30 mb-3`} />
+                <p className={`text-sm font-medium ${themeColors.textSecondary}`}>No monthly data available yet</p>
+                <p className={`text-xs ${themeColors.textSecondary} mt-1`}>Needs 2+ months of data to show trends</p>
+              </div>
+            ) : (
+            <BarChart data={monthlyChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
+              <XAxis 
+                dataKey="month" 
+                stroke={textColor} 
+                fontSize={11}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis 
+                stroke={textColor} 
+                fontSize={11}
+                tickLine={false}
+                axisLine={false}
+              />
+              <Tooltip content={<CustomTooltip unit="kWh" />} />
+              <Bar 
+                dataKey="production" 
+                name="Monthly Production" 
+                fill={accentColor} 
+                radius={[4, 4, 0, 0]}
+                maxBarSize={40}
+              />
+              <Bar 
+                dataKey="export" 
+                name="Grid Export" 
+                fill="#F59E0B" 
+                radius={[4, 4, 0, 0]}
+                maxBarSize={40}
+              />
+              <Bar 
+                dataKey="import" 
+                name="Grid Import" 
+                fill="#EF4444" 
+                radius={[4, 4, 0, 0]}
+                maxBarSize={40}
+              />
+              <Legend 
+                wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }}
+                iconType="circle"
+                iconSize={8}
+              />
+            </BarChart>
+            )
           )}
 
           {activeTab === 'production' && (
