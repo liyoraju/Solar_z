@@ -443,7 +443,7 @@ async def telemetry_history(
     sn: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
-    interval: str = Query("1 hour", regex=r"^\d+\s+(second|minute|hour|day)$"),
+    interval: str = Query("1 hour", pattern=r"^\d+\s+(second|minute|hour|day)$"),
     limit: int = Query(500, le=5000),
 ):
     """Aggregated history with configurable time bucket."""

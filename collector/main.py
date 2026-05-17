@@ -702,6 +702,8 @@ class Collector:
         self.buf = Buffer(self.rd)
         self.ae = AlertEval(self.rd, self.db)
         await self._init_billing()
+        await self._refresh_views()
+        await self._backfill_initial_cycle()
         await self.rd.set("collector:status", "running")
         log.info("Collector ready")
 
@@ -1026,11 +1028,71 @@ class Collector:
         except Exception as e:
             log.error("offline check: %s", e)
 
+    # -- materialized view refresh ------------------------------------------
+    async def _refresh_views(self):
+        try:
+            async with self.db.acquire() as c:
+                await c.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_daily")
+                await c.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_monthly")
+                await c.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_monthly_deltas")
+            log.info("Materialized views refreshed")
+        except Exception as e:
+            log.warning("Refresh materialized views: %s", e)
+
+    async def _backfill_initial_cycle(self):
+        try:
+            async with self.db.acquire() as c:
+                exists = await c.fetchval("SELECT 1 FROM billing_cycles LIMIT 1")
+                if exists:
+                    return
+                row = await c.fetchrow(
+                    """SELECT
+                        MIN(day) AS first_day,
+                        MAX(day) AS last_day,
+                        COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                        COALESCE(SUM(daily_savings), 0) AS sav,
+                        COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                        COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                        COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                        COUNT(*) AS days
+                    FROM telemetry_daily"""
+                )
+                if not row or not row["first_day"]:
+                    log.info("No telemetry_daily data yet — skipping cycle backfill")
+                    return
+                await c.execute(
+                    """INSERT INTO billing_cycles
+                       (cycle_start, cycle_end, total_production_kwh, total_savings,
+                        total_grid_export_kwh, total_grid_import_kwh, total_load_kwh,
+                        avg_daily_production, avg_daily_savings, day_count)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                    row["first_day"], row["last_day"] + timedelta(days=1),
+                    round(row["prod"], 2), round(row["sav"], 2),
+                    round(row["exp"], 2), round(row["imp"], 2),
+                    round(row["load"], 2),
+                    round(row["prod"] / row["days"], 2) if row["days"] > 0 else 0,
+                    round(row["sav"] / row["days"], 2) if row["days"] > 0 else 0,
+                    row["days"],
+                )
+                log.info(
+                    "Backfilled initial cycle: %s → %s (%d days, %.1f kWh, ₹%.2f)",
+                    row["first_day"], row["last_day"] + timedelta(days=1),
+                    row["days"], row["prod"], row["sav"],
+                )
+                await self.rd.set(
+                    "consumption:billing:cycle_start",
+                    (row["last_day"] + timedelta(days=1)).isoformat(),
+                )
+                await self.rd.set("consumption:billing:snapshot", str(row["load"]))
+        except Exception as e:
+            log.warning("Cycle backfill: %s", e)
+
     # -- main loop ----------------------------------------------------------
     async def run(self):
         self.running = True
         last_hist = 0.0
         offline_tick = 0
+        last_refresh = 0.0
         while self.running:
             # Check for remote stop command via Redis
             try:
@@ -1058,6 +1120,9 @@ class Collector:
             if now - offline_tick > 30:
                 await self._check_offline()
                 offline_tick = now
+            if now - last_refresh > 3600:
+                await self._refresh_views()
+                last_refresh = now
 
             await asyncio.sleep(Cfg.INTERVAL)
 
