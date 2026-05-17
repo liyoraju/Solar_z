@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -151,11 +151,12 @@ export const ChartsSection: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ChartTab>('hourly');
   const [zoomIndex, setZoomIndex] = useState(3);
   const [sliderIndex, setSliderIndex] = useState(0);
+  const userInteracted = useRef(false);
   const dailyData = useHistory(14);
   const billingCycles = useBillingCycles(12);
   const { telemetry } = useWebSocket();
 
-  useEffect(() => { setSliderIndex(0); }, [activeTab]);
+  useEffect(() => { userInteracted.current = false; setSliderIndex(0); }, [activeTab]);
 
   const zoom = ZOOM_LEVELS[zoomIndex];
   const timeData = zoom.useDaily
@@ -248,7 +249,8 @@ export const ChartsSection: React.FC = () => {
     : [];
 
   const sliderMax = Math.max(0, rawData.length - chartWindow);
-  const safeIndex = Math.min(sliderIndex, sliderMax);
+  const defaultEnd = sliderMax;
+  const safeIndex = userInteracted.current ? Math.min(sliderIndex, sliderMax) : defaultEnd;
   const slicedData = rawData.slice(safeIndex, safeIndex + chartWindow);
 
   const distributionData = [
@@ -624,7 +626,7 @@ export const ChartsSection: React.FC = () => {
             min={0}
             max={sliderMax}
             value={safeIndex}
-            onChange={(e) => setSliderIndex(parseInt(e.target.value))}
+            onChange={(e) => { userInteracted.current = true; setSliderIndex(parseInt(e.target.value)); }}
             style={{
               width: '100%',
               height: 4,
