@@ -22,6 +22,28 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+
+def get_cycle_start(today: datetime, start_day: int) -> datetime:
+    if today.day >= start_day:
+        return today.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
+    prev = today.replace(day=1) - timedelta(days=1)
+    return prev.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
+
+
+_INTERVAL_MAP = {
+    "5 seconds": "to_timestamp(floor(extract(epoch from time) / 5) * 5)",
+    "1 minute": "date_trunc('minute', time)",
+    "5 minutes": "to_timestamp(floor(extract(epoch from time) / 300) * 300)",
+    "1 hour": "date_trunc('hour', time)",
+    "1 day": "date_trunc('day', time)",
+}
+
+
+def _time_bucket_sql(interval: str) -> tuple[str, str]:
+    expr = _INTERVAL_MAP.get(interval, "date_trunc('hour', time)")
+    return f"{expr}::text", expr
+
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -176,6 +198,7 @@ class TariffConfig(BaseModel):
     currency: str = "INR"
     billing_kwh: float = 0
     cycle_start: Optional[str] = None
+    cycle_end_date: Optional[str] = None
     active_rate: float = 0
 
 
@@ -386,10 +409,11 @@ async def telemetry_history(
                 params.append(end)
                 idx += 1
             w = ("WHERE " + " AND ".join(where)) if where else ""
+            bucket_expr, bucket_group = _time_bucket_sql(interval)
             rows = await c.fetch(
                 f"""
                 SELECT
-                    time_bucket('{interval}', time)::text AS time,
+                    {bucket_expr} AS time,
                     AVG(COALESCE(pv1_power,0) + COALESCE(pv2_power,0)) AS avg_pv_power,
                     MAX(COALESCE(pv1_power,0) + COALESCE(pv2_power,0)) AS peak_pv_power,
                     AVG(inverter_power) AS avg_inverter_power,
@@ -400,7 +424,7 @@ async def telemetry_history(
                     MAX(daily_savings) AS daily_savings,
                     COUNT(*) AS sample_count
                 FROM telemetry {w}
-                GROUP BY time_bucket('{interval}', time)
+                GROUP BY {bucket_group}
                 ORDER BY 1 DESC LIMIT {limit}
             """,
                 *params,
@@ -711,6 +735,10 @@ async def set_tariff_config(body: TariffConfig):
         await redis.set("cfg:feed_in_tariff", str(body.feed_in_tariff))
         await redis.set("cfg:grid_import_tariff", str(body.grid_import_tariff))
         await redis.set("cfg:currency", body.currency)
+        if body.cycle_end_date:
+            await redis.set("cfg:billing_cycle_end_date", body.cycle_end_date)
+        else:
+            await redis.delete("cfg:billing_cycle_end_date")
         await redis.set("collector:command", "restart")
         return {"success": True}
     except Exception as e:
@@ -743,6 +771,7 @@ async def get_tariff_config():
         currency = (await redis.get("cfg:currency")) or settings.currency
         billing_kwh = float(await redis.get("collector:billing_kwh") or "0")
         cycle_start = await redis.get("consumption:billing:cycle_start")
+        cycle_end_date = await redis.get("cfg:billing_cycle_end_date")
         active_rate = float(await redis.get("collector:tariff_rate") or "0")
         return TariffConfig(
             mode=mode,
@@ -754,6 +783,7 @@ async def get_tariff_config():
             currency=currency,
             billing_kwh=round(billing_kwh, 2),
             cycle_start=cycle_start,
+            cycle_end_date=cycle_end_date,
             active_rate=active_rate,
         )
     except Exception as e:
@@ -878,6 +908,454 @@ async def collector_status():
             billing_kwh=bill,
             tariff_rate=trf,
         )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Billing Cycles & Reports
+# ---------------------------------------------------------------------------
+
+class BillingCycle(BaseModel):
+    cycle_start: str
+    cycle_end: Optional[str] = None
+    total_production_kwh: float = 0
+    total_savings: float = 0
+    total_grid_export_kwh: float = 0
+    total_grid_import_kwh: float = 0
+    total_load_kwh: float = 0
+    avg_daily_production: float = 0
+    avg_daily_savings: float = 0
+    day_count: int = 0
+    is_current: bool = False
+
+
+class CycleEndDate(BaseModel):
+    end_date: str
+
+
+class FinalizeCycleRequest(BaseModel):
+    notes: str = ""
+
+
+class BillingReport(BaseModel):
+    id: int
+    cycle_start: str
+    cycle_end: str
+    total_production_kwh: float
+    total_savings: float
+    total_grid_export_kwh: float
+    total_grid_import_kwh: float
+    total_load_kwh: float
+    avg_daily_production: float
+    avg_daily_savings: float
+    day_count: int
+    finalized_at: str
+    notes: str = ""
+
+
+class CycleStatus(BaseModel):
+    has_end_date: bool
+    end_date: str | None
+    days_remaining: int | None
+    is_past_end: bool
+    current_cycle: BillingCycle | None
+
+
+@app.get("/api/analytics/billing-cycle/status", response_model=CycleStatus)
+async def get_cycle_status():
+    try:
+        end_date_str = await redis.get("cfg:billing_cycle_end_date")
+        current_row = await db_pool.fetchval(
+            "SELECT cycle_start FROM billing_cycles WHERE cycle_end IS NULL ORDER BY cycle_start DESC LIMIT 1"
+        )
+        current_cycle = None
+        if current_row:
+            async with db_pool.acquire() as c:
+                row = await c.fetchrow(
+                    """
+                    SELECT
+                        COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                        COALESCE(SUM(daily_savings), 0) AS sav,
+                        COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                        COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                        COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                        COUNT(*) AS days
+                    FROM telemetry_daily
+                    WHERE day >= $1 AND day < CURRENT_DATE
+                    """,
+                    current_row,
+                )
+                row = dict(row) if row else None
+                if row:
+                    today_row = await c.fetchrow(
+                        """SELECT
+                            daily_production,
+                            daily_savings,
+                            daily_grid_export,
+                            daily_grid_import,
+                            daily_load_consumption
+                        FROM telemetry
+                        WHERE time >= CURRENT_DATE
+                        ORDER BY time DESC
+                        LIMIT 1"""
+                    )
+                    if today_row:
+                        row["prod"] += (today_row["daily_production"] or 0)
+                        row["sav"] += (today_row["daily_savings"] or 0)
+                        row["exp"] += (today_row["daily_grid_export"] or 0)
+                        row["imp"] += (today_row["daily_grid_import"] or 0)
+                        row["load"] += (today_row["daily_load_consumption"] or 0)
+                        row["days"] += 1
+                if row and row["days"] > 0:
+                    days = row["days"]
+                    current_cycle = BillingCycle(
+                        cycle_start=current_row.isoformat(),
+                        cycle_end=None,
+                        total_production_kwh=round(row["prod"], 2),
+                        total_savings=round(row["sav"], 2),
+                        total_grid_export_kwh=round(row["exp"], 2),
+                        total_grid_import_kwh=round(row["imp"], 2),
+                        total_load_kwh=round(row["load"], 2),
+                        avg_daily_production=round(row["prod"] / days, 2),
+                        avg_daily_savings=round(row["sav"] / days, 2),
+                        day_count=days,
+                        is_current=True,
+                    )
+        if not end_date_str:
+            return CycleStatus(
+                has_end_date=False, end_date=None,
+                days_remaining=None, is_past_end=False,
+                current_cycle=current_cycle,
+            )
+        end_date = datetime.fromisoformat(end_date_str)
+        now = datetime.now(timezone.utc)
+        days_remaining = (end_date - now).days
+        return CycleStatus(
+            has_end_date=True, end_date=end_date_str,
+            days_remaining=days_remaining if days_remaining > 0 else 0,
+            is_past_end=now >= end_date,
+            current_cycle=current_cycle,
+        )
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/analytics/billing-cycle/end-date")
+async def set_cycle_end_date(body: CycleEndDate):
+    try:
+        await redis.set("cfg:billing_cycle_end_date", body.end_date)
+        return {"success": True, "end_date": body.end_date}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.delete("/api/analytics/billing-cycle/end-date")
+async def clear_cycle_end_date():
+    try:
+        await redis.delete("cfg:billing_cycle_end_date")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/analytics/billing-cycle/finalize")
+async def finalize_cycle(body: FinalizeCycleRequest):
+    try:
+        async with db_pool.acquire() as c:
+            current = await c.fetchrow(
+                "SELECT * FROM billing_cycles WHERE cycle_end IS NULL ORDER BY cycle_start DESC LIMIT 1"
+            )
+            if not current:
+                return {"success": False, "message": "No active cycle to finalize"}
+            cycle_end = datetime.now(timezone.utc)
+            end_date_str = await redis.get("cfg:billing_cycle_end_date")
+            if end_date_str:
+                cycle_end = datetime.fromisoformat(end_date_str).replace(tzinfo=timezone.utc)
+            row = await c.fetchrow(
+                """SELECT
+                    COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                    COALESCE(SUM(daily_savings), 0) AS sav,
+                    COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                    COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                    COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                    COUNT(*) AS days
+                FROM telemetry_daily
+                WHERE day >= $1 AND day < $2""",
+                current["cycle_start"], cycle_end,
+            )
+            days = row["days"] if row else 0
+            prod = round(row["prod"], 2) if row else 0
+            sav = round(row["sav"], 2) if row else 0
+            exp = round(row["exp"], 2) if row else 0
+            imp = round(row["imp"], 2) if row else 0
+            load = round(row["load"], 2) if row else 0
+            avg_prod = round(row["prod"] / days, 2) if row and days > 0 else 0
+            avg_sav = round(row["sav"] / days, 2) if row and days > 0 else 0
+
+            await c.execute(
+                """UPDATE billing_cycles SET
+                    cycle_end = $1,
+                    total_production_kwh = $2,
+                    total_savings = $3,
+                    total_grid_export_kwh = $4,
+                    total_grid_import_kwh = $5,
+                    total_load_kwh = $6,
+                    avg_daily_production = $7,
+                    avg_daily_savings = $8,
+                    day_count = $9
+                WHERE cycle_start = $10""",
+                cycle_end, prod, sav, exp, imp, load, avg_prod, avg_sav, days,
+                current["cycle_start"],
+            )
+            await c.execute(
+                """INSERT INTO billing_reports
+                   (cycle_start, cycle_end, total_production_kwh, total_savings,
+                    total_grid_export_kwh, total_grid_import_kwh, total_load_kwh,
+                    avg_daily_production, avg_daily_savings, day_count, notes)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)""",
+                current["cycle_start"], cycle_end,
+                prod, sav, exp, imp, load, avg_prod, avg_sav, days,
+                body.notes,
+            )
+            await redis.delete("cfg:billing_cycle_end_date")
+            await redis.delete("consumption:billing:cycle_start_date")
+            new_start = (cycle_end + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            await c.execute(
+                """INSERT INTO billing_cycles (cycle_start) VALUES ($1)""",
+                new_start,
+            )
+            await redis.set("consumption:billing:cycle_start_date", new_start.isoformat())
+            return {
+                "success": True,
+                "message": f"Cycle finalized: {current['cycle_start'].date()} to {cycle_end.date()}",
+                "report_id": await c.fetchval("SELECT id FROM billing_reports ORDER BY id DESC LIMIT 1"),
+            }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/analytics/billing-reports", response_model=List[BillingReport])
+async def get_billing_reports(limit: int = Query(12, le=120)):
+    try:
+        async with db_pool.acquire() as c:
+            rows = await c.fetch(
+                """SELECT * FROM billing_reports ORDER BY cycle_start DESC LIMIT $1""",
+                limit,
+            )
+            return [
+                BillingReport(
+                    id=r["id"],
+                    cycle_start=r["cycle_start"].isoformat(),
+                    cycle_end=r["cycle_end"].isoformat(),
+                    total_production_kwh=round(r["total_production_kwh"] or 0, 2),
+                    total_savings=round(r["total_savings"] or 0, 2),
+                    total_grid_export_kwh=round(r["total_grid_export_kwh"] or 0, 2),
+                    total_grid_import_kwh=round(r["total_grid_import_kwh"] or 0, 2),
+                    total_load_kwh=round(r["total_load_kwh"] or 0, 2),
+                    avg_daily_production=round(r["avg_daily_production"] or 0, 2),
+                    avg_daily_savings=round(r["avg_daily_savings"] or 0, 2),
+                    day_count=r["day_count"] or 0,
+                    finalized_at=r["finalized_at"].isoformat(),
+                    notes=r["notes"] or "",
+                )
+                for r in rows
+            ]
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/api/analytics/billing-cycles", response_model=List[BillingCycle])
+async def analytics_billing_cycles(months: int = Query(6, le=60)):
+    try:
+        async with db_pool.acquire() as c:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=months * 30)
+            rows = await c.fetch(
+                """SELECT cycle_start, cycle_end,
+                          total_production_kwh, total_savings,
+                          total_grid_export_kwh, total_grid_import_kwh,
+                          total_load_kwh, avg_daily_production, avg_daily_savings,
+                          day_count
+                   FROM billing_cycles
+                   WHERE cycle_start >= $1
+                   ORDER BY cycle_start DESC""",
+                cutoff,
+            )
+            result = []
+            for r in rows:
+                is_current = r["cycle_end"] is None
+                if is_current:
+                    live = await c.fetchrow(
+                        """SELECT
+                            COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                            COALESCE(SUM(daily_savings), 0) AS sav,
+                            COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                            COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                            COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                            COUNT(*) AS days
+                        FROM telemetry_daily
+                        WHERE day >= $1 AND day < CURRENT_DATE""",
+                        r["cycle_start"],
+                    )
+                    live = dict(live)
+                    today_row = await c.fetchrow(
+                        """SELECT
+                            daily_production,
+                            daily_savings,
+                            daily_grid_export,
+                            daily_grid_import,
+                            daily_load_consumption
+                        FROM telemetry
+                        WHERE time >= CURRENT_DATE
+                        ORDER BY time DESC
+                        LIMIT 1"""
+                    )
+                    if today_row:
+                        live["prod"] += (today_row["daily_production"] or 0)
+                        live["sav"] += (today_row["daily_savings"] or 0)
+                        live["exp"] += (today_row["daily_grid_export"] or 0)
+                        live["imp"] += (today_row["daily_grid_import"] or 0)
+                        live["load"] += (today_row["daily_load_consumption"] or 0)
+                        live["days"] += 1
+                    days = live["days"]
+                    if days > 0:
+                        result.append(BillingCycle(
+                            cycle_start=r["cycle_start"].isoformat(),
+                            cycle_end=None,
+                            total_production_kwh=round(live["prod"], 2),
+                            total_savings=round(live["sav"], 2),
+                            total_grid_export_kwh=round(live["exp"], 2),
+                            total_grid_import_kwh=round(live["imp"], 2),
+                            total_load_kwh=round(live["load"], 2),
+                            avg_daily_production=round(live["prod"] / days, 2),
+                            avg_daily_savings=round(live["sav"] / days, 2),
+                            day_count=days,
+                            is_current=True,
+                        ))
+                    else:
+                        result.append(BillingCycle(
+                            cycle_start=r["cycle_start"].isoformat(),
+                            cycle_end=None,
+                            is_current=True,
+                        ))
+                else:
+                    result.append(BillingCycle(
+                        cycle_start=r["cycle_start"].isoformat(),
+                        cycle_end=r["cycle_end"].isoformat(),
+                        total_production_kwh=round(r["total_production_kwh"] or 0, 2),
+                        total_savings=round(r["total_savings"] or 0, 2),
+                        total_grid_export_kwh=round(r["total_grid_export_kwh"] or 0, 2),
+                        total_grid_import_kwh=round(r["total_grid_import_kwh"] or 0, 2),
+                        total_load_kwh=round(r["total_load_kwh"] or 0, 2),
+                        avg_daily_production=round(r["avg_daily_production"] or 0, 2),
+                        avg_daily_savings=round(r["avg_daily_savings"] or 0, 2),
+                        day_count=r["day_count"] or 0,
+                        is_current=False,
+                    ))
+            return result
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/analytics/billing-cycles/backfill")
+async def backfill_billing_cycles():
+    try:
+        async with db_pool.acquire() as c:
+            earliest = await c.fetchval("SELECT MIN(day) FROM telemetry_daily")
+            if not earliest:
+                return {"backfilled": 0, "message": "No daily data found"}
+            start_day = int((await redis.get("cfg:billing_cycle_start_day")) or "1")
+            now = datetime.now(timezone.utc)
+            cursor = earliest.replace(tzinfo=timezone.utc)
+            backfilled = 0
+            while cursor < now:
+                cycle_start = get_cycle_start(cursor, start_day)
+                if cycle_start.month != cursor.month or cycle_start.year != cursor.year:
+                    cursor = cycle_start
+                    continue
+                next_start = get_cycle_start(
+                    (cycle_start + timedelta(days=32)).replace(day=1), start_day
+                )
+                existing = await c.fetchval(
+                    "SELECT 1 FROM billing_cycles WHERE cycle_start = $1", cycle_start
+                )
+                if not existing and next_start <= now:
+                    row = await c.fetchrow(
+                        """SELECT
+                            COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                            COALESCE(SUM(daily_savings), 0) AS sav,
+                            COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                            COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                            COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                            COUNT(*) AS days
+                        FROM telemetry_daily
+                        WHERE day >= $1 AND day < $2""",
+                        cycle_start, next_start,
+                    )
+                    if row and row["days"] > 0:
+                        await c.execute(
+                            """INSERT INTO billing_cycles
+                               (cycle_start, cycle_end, total_production_kwh, total_savings,
+                                total_grid_export_kwh, total_grid_import_kwh, total_load_kwh,
+                                avg_daily_production, avg_daily_savings, day_count)
+                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                            cycle_start, next_start,
+                            round(row["prod"], 2), round(row["sav"], 2),
+                            round(row["exp"], 2), round(row["imp"], 2),
+                            round(row["load"], 2),
+                            round(row["prod"] / row["days"], 2),
+                            round(row["sav"] / row["days"], 2),
+                            row["days"],
+                        )
+                        backfilled += 1
+                cursor = next_start
+            return {"backfilled": backfilled}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/analytics/billing-reports/backfill")
+async def backfill_billing_reports():
+    try:
+        async with db_pool.acquire() as c:
+            rows = await c.fetch(
+                "SELECT id, cycle_start, cycle_end FROM billing_reports WHERE day_count = 0 ORDER BY cycle_start ASC"
+            )
+            updated = 0
+            for r in rows:
+                row = await c.fetchrow(
+                    """SELECT
+                        COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                        COALESCE(SUM(daily_savings), 0) AS sav,
+                        COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                        COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                        COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                        COUNT(*) AS days
+                    FROM telemetry_daily
+                    WHERE day >= $1 AND day < $2""",
+                    r["cycle_start"], r["cycle_end"],
+                )
+                days = row["days"]
+                if days > 0:
+                    prod = round(row["prod"], 2)
+                    sav = round(row["sav"], 2)
+                    exp = round(row["exp"], 2)
+                    imp = round(row["imp"], 2)
+                    load = round(row["load"], 2)
+                    avg_prod = round(row["prod"] / days, 2)
+                    avg_sav = round(row["sav"] / days, 2)
+                    await c.execute(
+                        """UPDATE billing_reports SET
+                            total_production_kwh = $1, total_savings = $2,
+                            total_grid_export_kwh = $3, total_grid_import_kwh = $4,
+                            total_load_kwh = $5, avg_daily_production = $6,
+                            avg_daily_savings = $7, day_count = $8
+                        WHERE id = $9""",
+                        prod, sav, exp, imp, load, avg_prod, avg_sav, days,
+                        r["id"],
+                    )
+                    updated += 1
+            return {"updated": updated}
     except Exception as e:
         raise HTTPException(500, str(e))
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { save as cacheSave, load as cacheLoad } from '../services/offlineStorage';
 
 export interface TelemetryData {
   time: string;
@@ -70,10 +71,12 @@ export function useWebSocket() {
           const data = JSON.parse(event.data);
           if (data.type === 'telemetry') {
             setTelemetry(data.payload);
+            cacheSave('telemetry', data.payload);
           } else if (data.type === 'alert') {
             setAlerts((prev) => [data.payload, ...prev].slice(0, 50));
           } else {
             setTelemetry(data);
+            cacheSave('telemetry', data);
           }
         } catch {
           // Raw telemetry data
@@ -113,10 +116,14 @@ export function useWebSocket() {
         if (res.ok) {
           const data = await res.json();
           setTelemetry(data);
+          cacheSave('telemetry', data);
+          return;
         }
       } catch {
         // Silently fail
       }
+      const cached = await cacheLoad<any>('telemetry');
+      if (cached) setTelemetry(cached);
     };
 
     poll();

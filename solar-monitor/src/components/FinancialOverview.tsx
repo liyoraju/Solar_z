@@ -1,9 +1,18 @@
 import React from 'react';
 import { useTheme } from '../hooks/useTheme';
-import { useFinancial, useOverview, useTariffConfig } from '../hooks/useApi';
+import { useFinancial, useOverview, useTariffConfig, useBillingCycles } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { formatNumber, formatCurrency } from '../utils/helpers';
-import { IndianRupee, TrendingUp, Leaf, Zap, ArrowUpRight, ArrowDownRight, BarChart3 } from 'lucide-react';
+import { IndianRupee, TrendingUp, TrendingDown, Leaf, Zap, ArrowUpRight, ArrowDownRight, BarChart3, Calendar } from 'lucide-react';
+
+function cycleLabel(cycle: { cycle_start: string; cycle_end: string | null; is_current: boolean }): string {
+  if (cycle.is_current) return 'This Cycle';
+  const start = new Date(cycle.cycle_start);
+  const end = cycle.cycle_end ? new Date(cycle.cycle_end) : null;
+  const startStr = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const endStr = end ? end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Present';
+  return `${startStr} – ${endStr}`;
+}
 
 export const FinancialOverview: React.FC = () => {
   const { themeColors, timeOfDay } = useTheme();
@@ -11,6 +20,7 @@ export const FinancialOverview: React.FC = () => {
   const { data: overview } = useOverview();
   const { telemetry } = useWebSocket();
   const tariffConfig = useTariffConfig();
+  const { data: cycles } = useBillingCycles(3);
 
   const accentColor = {
     morning: 'text-orange-500',
@@ -36,6 +46,15 @@ export const FinancialOverview: React.FC = () => {
   const importTariff = tariffConfig?.active_rate ?? financial?.grid_import_tariff ?? 6.0;
   const tariffMode = tariffConfig?.mode ?? 'telescopic';
 
+  const currentCycle = cycles.find(c => c.is_current) || null;
+  const prevCycle = cycles.length > 1 ? cycles[1] : null;
+  const cycleSavings = currentCycle?.total_savings ?? 0;
+  const cycleProd = currentCycle?.total_production_kwh ?? 0;
+  const cycleLabelStr = currentCycle ? cycleLabel(currentCycle) : 'This Cycle';
+  const savingsTrend = prevCycle && prevCycle.total_savings > 0
+    ? ((cycleSavings - prevCycle.total_savings) / prevCycle.total_savings * 100)
+    : null;
+
   return (
     <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-4 sm:p-6`}>
       <div className="flex items-center justify-between mb-5">
@@ -49,7 +68,7 @@ export const FinancialOverview: React.FC = () => {
       </div>
 
       {/* Main savings cards */}
-      <div className="grid grid-cols-2 gap-3 mb-5">
+      <div className="grid grid-cols-2 gap-3 mb-3">
         <div className={`p-4 rounded-xl ${themeColors.bg} border ${themeColors.border}`}>
           <div className="flex items-center gap-2 mb-2">
             <TrendingUp className={`w-4 h-4 ${accentColor}`} />
@@ -67,6 +86,30 @@ export const FinancialOverview: React.FC = () => {
           <p className={`text-xs ${themeColors.textSecondary} mt-1`}>{formatNumber(totalProd, 1)} kWh lifetime</p>
         </div>
       </div>
+
+      {/* Current cycle savings card */}
+      {currentCycle && (
+        <div className={`p-4 rounded-xl ${accentBg} border ${themeColors.border} mb-3`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Calendar className={`w-4 h-4 ${accentColor}`} />
+              <span className={`text-[10px] uppercase tracking-wider font-medium ${themeColors.textSecondary}`}>{cycleLabelStr}</span>
+            </div>
+            {savingsTrend !== null && (
+              <div className={`flex items-center gap-1 text-xs font-medium ${
+                savingsTrend >= 0 ? 'text-green-500' : 'text-red-500'
+              }`}>
+                {savingsTrend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                {Math.abs(savingsTrend).toFixed(0)}%
+              </div>
+            )}
+          </div>
+          <div className="flex items-baseline gap-2 mt-2">
+            <p className={`text-2xl font-bold ${themeColors.text}`}>{formatCurrency(cycleSavings, currency)}</p>
+            <span className={`text-xs ${themeColors.textSecondary}`}>{formatNumber(cycleProd, 1)} kWh</span>
+          </div>
+        </div>
+      )}
 
       {/* Tariff info */}
       <div className={`p-3 rounded-xl ${themeColors.bg} mb-4`}>

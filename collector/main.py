@@ -66,6 +66,13 @@ class Cfg:
         return slabs
 
     @staticmethod
+    def get_cycle_start(today: datetime, start_day: int) -> datetime:
+        if today.day >= start_day:
+            return today.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
+        prev = today.replace(day=1) - timedelta(days=1)
+        return prev.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
+
+    @staticmethod
     def effective_import_tariff(total_kwh):
         raw = Cfg.TARIFF_NT if Cfg.TARIFF_MODE == "non_telescopic" else Cfg.TARIFF_SLABS
         slabs = Cfg._parse_slabs(raw)
@@ -787,6 +794,14 @@ class Collector:
             await self.rd.set("cfg:billing_days", str(Cfg.BILLING_DAYS))
         if not await self.rd.exists("cfg:feed_in_tariff"):
             await self.rd.set("cfg:feed_in_tariff", str(Cfg.FEED_IN_TARIFF))
+        if not await self.rd.exists("cfg:billing_cycle_start_day"):
+            await self.rd.set("cfg:billing_cycle_start_day", "1")
+        if not await self.rd.exists("consumption:billing:cycle_start_date"):
+            start_day = int((await self.rd.get("cfg:billing_cycle_start_day")) or "1")
+            cs = Cfg.get_cycle_start(datetime.now(timezone.utc), start_day)
+            await self.rd.set("consumption:billing:cycle_start_date", cs.isoformat())
+        if not await self.rd.exists("collector:total_load_snapshot"):
+            await self.rd.set("collector:total_load_snapshot", "0")
 
     async def _billing_consumption_kwh(self, total_load: Optional[float]) -> float:
         if total_load is None:
@@ -842,7 +857,71 @@ class Collector:
         except Exception as e:
             log.error("update inverter: %s", e)
 
+    async def _rollover_cycle(self, old_start_str: str, new_start: datetime):
+        try:
+            old_start = datetime.fromisoformat(old_start_str)
+            async with self.db.acquire() as c:
+                row = await c.fetchrow(
+                    """SELECT
+                        COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                        COALESCE(SUM(daily_savings), 0) AS sav,
+                        COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
+                        COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
+                        COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
+                        COUNT(*) AS days
+                    FROM telemetry_daily
+                    WHERE day >= $1 AND day < $2""",
+                    old_start, new_start,
+                )
+                if row and row["days"] > 0:
+                    await c.execute(
+                        """INSERT INTO billing_cycles
+                           (cycle_start, cycle_end, total_production_kwh, total_savings,
+                            total_grid_export_kwh, total_grid_import_kwh, total_load_kwh,
+                            avg_daily_production, avg_daily_savings, day_count)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                        old_start, new_start,
+                        round(row["prod"], 2),
+                        round(row["sav"], 2),
+                        round(row["exp"], 2),
+                        round(row["imp"], 2),
+                        round(row["load"], 2),
+                        round(row["prod"] / row["days"], 2) if row["days"] > 0 else 0,
+                        round(row["sav"] / row["days"], 2) if row["days"] > 0 else 0,
+                        row["days"],
+                    )
+                    log.info(
+                        "Cycle rolled over: %s → %s (%d days, %.1f kWh, ₹%.2f)",
+                        old_start.date(), new_start.date(), row["days"], row["prod"], row["sav"],
+                    )
+                else:
+                    await c.execute(
+                        """INSERT INTO billing_cycles (cycle_start, cycle_end) VALUES ($1, $2)""",
+                        old_start, new_start,
+                    )
+            total_load = _float(await self.rd.get("collector:total_load_snapshot") or "0")
+            await self.rd.set("consumption:billing:snapshot", str(total_load))
+            await self.rd.set("consumption:billing:cycle_start_date", new_start.isoformat())
+        except Exception as e:
+            log.error("rollover cycle: %s", e)
+
+    async def _check_cycle_rollover(self):
+        try:
+            start_day = int((await self.rd.get("cfg:billing_cycle_start_day")) or "1")
+            now = datetime.now(timezone.utc)
+            expected_start = Cfg.get_cycle_start(now, start_day)
+            stored_str = await self.rd.get("consumption:billing:cycle_start_date")
+            if stored_str:
+                stored_start = datetime.fromisoformat(stored_str).replace(tzinfo=timezone.utc)
+                if expected_start > stored_start:
+                    await self._rollover_cycle(stored_str, expected_start)
+            else:
+                await self.rd.set("consumption:billing:cycle_start_date", expected_start.isoformat())
+        except Exception as e:
+            log.error("check cycle rollover: %s", e)
+
     async def tick(self):
+        await self._check_cycle_rollover()
         raw = await self.client.realtime()
         if not raw:
             self.errors += 1
@@ -878,6 +957,8 @@ class Collector:
         await self.rd.set("collector:error_count", str(self.errors))
         await self.rd.set("collector:billing_kwh", str(billing_kwh))
         await self.rd.set("collector:tariff_rate", str(tariff))
+        if total_load is not None:
+            await self.rd.set("collector:total_load_snapshot", str(total_load))
 
     async def _sync_history(self):
         log.info("History sync…")

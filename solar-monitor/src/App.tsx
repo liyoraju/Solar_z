@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ThemeProvider, useTheme, TimeOfDay, ThemeColors, themeLabels, themeIcons } from './hooks/useTheme';
-import { useMonthlyStats, useTariffConfig } from './hooks/useApi';
+import { useTariffConfig, useCycleStatus } from './hooks/useApi';
 import { WeatherBackground } from './components/WeatherBackground';
 import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
@@ -8,8 +8,8 @@ import { TelemetryGrid } from './components/TelemetryGrid';
 import { ChartsSection } from './components/ChartsSection';
 import { SolarHouseVisualization } from './components/SolarHouseVisualization';
 import { FinancialOverview } from './components/FinancialOverview';
-import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, ArrowUpRight, ArrowDownRight, Thermometer, Waves, TrendingUp, TrendingDown } from 'lucide-react';
-import { formatCurrency } from './utils/helpers';
+import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, AlertCircle, WifiOff } from 'lucide-react';
+import { useNetworkStatus } from './hooks/useNetworkStatus';
 
 type Tab = 'dashboard' | 'telemetry' | 'reports' | 'settings';
 
@@ -68,172 +68,159 @@ const Navigation: React.FC<{ activeTab: Tab; onTabChange: (tab: Tab) => void }> 
   );
 };
 
+const CycleEndBanner: React.FC = () => {
+  const { themeColors } = useTheme();
+  const cycleStatus = useCycleStatus();
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [finalizing, setFinalizing] = useState(false);
+  const [finalized, setFinalized] = useState(false);
+
+  if (!cycleStatus.data || !cycleStatus.data.has_end_date) return null;
+
+  const { days_remaining, is_past_end, current_cycle } = cycleStatus.data;
+  const isUrgent = days_remaining !== null && days_remaining <= 3;
+
+  const handleFinalize = async () => {
+    setFinalizing(true);
+    try {
+      const res = await fetch('/api/analytics/billing-cycle/finalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      if (res.ok) {
+        setFinalized(true);
+        setTimeout(() => {
+          setShowConfirm(false);
+          setFinalized(false);
+          setNotes('');
+        }, 2000);
+      }
+    } catch (e) {
+      console.error('Failed to finalize cycle', e);
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  const bannerBg = is_past_end
+    ? 'bg-red-500/10 border-red-500/30'
+    : isUrgent
+    ? 'bg-amber-500/10 border-amber-500/30'
+    : `${themeColors.surface} border ${themeColors.border}`;
+
+  const iconColor = is_past_end ? 'text-red-400' : isUrgent ? 'text-amber-400' : themeColors.accent;
+
+  return (
+    <>
+      <div className={`rounded-xl border p-3 sm:p-4 ${bannerBg}`}>
+        <div className="flex items-start gap-3">
+          <AlertCircle className={`w-5 h-5 mt-0.5 flex-shrink-0 ${iconColor}`} />
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-medium ${themeColors.text}`}>
+              {is_past_end
+                ? 'Billing cycle end date has passed'
+                : days_remaining === 0
+                ? 'Billing cycle ends today'
+                : `Billing cycle ends in ${days_remaining} day${days_remaining !== 1 ? 's' : ''}`}
+            </p>
+            {current_cycle && (
+              <p className={`text-xs ${themeColors.textSecondary} mt-1`}>
+                {current_cycle.total_production_kwh.toFixed(1)} kWh produced · ₹{current_cycle.total_savings.toFixed(2)} saved · {current_cycle.day_count} days
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => setShowConfirm(true)}
+            className={`flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              is_past_end || isUrgent
+                ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                : `${themeColors.accentLight} ${themeColors.accent} hover:opacity-90`
+            }`}
+          >
+            Finalize
+          </button>
+        </div>
+      </div>
+
+      {showConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowConfirm(false)}>
+          <div
+            className={`${themeColors.surface} rounded-2xl p-6 max-w-md w-full shadow-2xl`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className={`text-lg font-bold ${themeColors.text} mb-2`}>Finalize Billing Cycle</h3>
+            <p className={`text-sm ${themeColors.textSecondary} mb-4`}>
+              This will close the current cycle and save it as a report. A new cycle will start automatically.
+            </p>
+            {current_cycle && (
+              <div className={`rounded-xl ${themeColors.bg} p-3 mb-4`}>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <span className={themeColors.textSecondary}>Production</span>
+                    <p className={`font-bold ${themeColors.text}`}>{current_cycle.total_production_kwh.toFixed(1)} kWh</p>
+                  </div>
+                  <div>
+                    <span className={themeColors.textSecondary}>Savings</span>
+                    <p className={`font-bold ${themeColors.text}`}>₹{current_cycle.total_savings.toFixed(2)}</p>
+                  </div>
+                  <div>
+                    <span className={themeColors.textSecondary}>Days</span>
+                    <p className={`font-bold ${themeColors.text}`}>{current_cycle.day_count}</p>
+                  </div>
+                  <div>
+                    <span className={themeColors.textSecondary}>Avg/Day</span>
+                    <p className={`font-bold ${themeColors.text}`}>{current_cycle.avg_daily_production.toFixed(1)} kWh</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Optional notes..."
+              className={`w-full px-3 py-2 rounded-xl text-sm ${themeColors.bg} border ${themeColors.border} ${themeColors.text} resize-none mb-4`}
+              rows={2}
+            />
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className={`px-4 py-2 rounded-xl text-sm font-medium ${themeColors.textSecondary} hover:${themeColors.text} transition-all`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleFinalize}
+                disabled={finalizing}
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                  finalizing || finalized
+                    ? 'bg-green-500/20 text-green-400'
+                    : 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                }`}
+              >
+                {finalized ? '✓ Finalized' : finalizing ? 'Finalizing...' : 'Confirm & Finalize'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
+
+
 const DashboardContent: React.FC = () => {
   return (
     <div className="space-y-4 sm:space-y-6 pb-24 lg:pb-6">
+      <CycleEndBanner />
       <StatsCards />
-      <MonthlyKPI />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6">
         <SolarHouseVisualization />
         <FinancialOverview />
       </div>
       <ChartsSection />
-    </div>
-  );
-};
-
-const MonthlyKPI: React.FC = () => {
-  const { themeColors, timeOfDay } = useTheme();
-  const { data, loading } = useMonthlyStats(3);
-  const tariffConfig = useTariffConfig();
-  const currency = tariffConfig?.currency ?? 'INR';
-
-  const accentColor = {
-    morning: 'text-orange-500',
-    afternoon: 'text-blue-500',
-    evening: 'text-orange-600',
-    night: 'text-blue-400',
-  }[timeOfDay];
-
-  const accentBg = {
-    morning: 'bg-orange-50',
-    afternoon: 'bg-blue-50',
-    evening: 'bg-orange-50',
-    night: 'bg-blue-900/20',
-  }[timeOfDay];
-
-  if (loading) {
-    return (
-      <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-4 sm:p-6`}>
-        <div className="flex items-center gap-2 mb-4">
-          <h2 className={`text-base sm:text-lg font-bold ${themeColors.text}`}>Monthly Overview</h2>
-          <Loader2 className={`w-4 h-4 animate-spin ${themeColors.textSecondary}`} />
-        </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className={`p-3 rounded-xl ${themeColors.bg} border ${themeColors.border} animate-pulse`}>
-              <div className={`h-3 w-20 rounded ${themeColors.surfaceHover} mb-2`} />
-              <div className={`h-6 w-16 rounded ${themeColors.surfaceHover}`} />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (data.length === 0) return null;
-
-  const current = data[0];
-  const previous = data.length > 1 ? data[1] : null;
-
-  const prodTrend = previous && previous.monthly_production_kwh > 0
-    ? ((current.monthly_production_kwh - previous.monthly_production_kwh) / previous.monthly_production_kwh * 100)
-    : null;
-  const savingsTrend = previous && previous.monthly_savings > 0
-    ? ((current.monthly_savings - previous.monthly_savings) / previous.monthly_savings * 100)
-    : null;
-  const selfConsumptionTrend = previous
-    ? current.self_consumption_pct - previous.self_consumption_pct
-    : null;
-
-  const monthLabel = new Date(current.month + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-  const kpis = [
-    {
-      label: 'Monthly Production',
-      value: `${current.monthly_production_kwh.toFixed(0)} kWh`,
-      trend: prodTrend,
-      icon: <Sun className={`w-4 h-4 ${accentColor}`} />,
-      bg: accentBg,
-    },
-    {
-      label: 'Monthly Savings',
-      value: formatCurrency(current.monthly_savings, currency),
-      trend: savingsTrend,
-      icon: <IndianRupee className={`w-4 h-4 ${accentColor}`} />,
-      bg: accentBg,
-    },
-    {
-      label: 'Self-Consumption',
-      value: `${current.self_consumption_pct.toFixed(0)}%`,
-      trend: selfConsumptionTrend,
-      icon: <Zap className={`w-4 h-4 ${accentColor}`} />,
-      bg: accentBg,
-    },
-    {
-      label: 'Grid Export',
-      value: `${current.total_grid_export_kwh.toFixed(0)} kWh`,
-      icon: <ArrowUpRight className="w-4 h-4 text-green-500" />,
-      bg: 'bg-green-50',
-    },
-    {
-      label: 'Grid Import',
-      value: `${current.total_grid_import_kwh.toFixed(0)} kWh`,
-      icon: <ArrowDownRight className="w-4 h-4 text-orange-500" />,
-      bg: 'bg-orange-50',
-    },
-    {
-      label: 'Peak Power',
-      value: current.peak_inverter_power ? `${(current.peak_inverter_power / 1000).toFixed(1)} kW` : '—',
-      icon: <Waves className={`w-4 h-4 ${accentColor}`} />,
-      bg: accentBg,
-    },
-    {
-      label: 'Max Temp',
-      value: current.max_temperature ? `${current.max_temperature.toFixed(0)}°C` : '—',
-      icon: <Thermometer className={`w-4 h-4 ${accentColor}`} />,
-      bg: accentBg,
-    },
-    {
-      label: 'Load Consumed',
-      value: `${current.total_load_kwh.toFixed(0)} kWh`,
-      icon: <Activity className={`w-4 h-4 ${accentColor}`} />,
-      bg: accentBg,
-    },
-  ];
-
-  return (
-    <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-4 sm:p-6`}>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <h2 className={`text-base sm:text-lg font-bold ${themeColors.text}`}>Monthly Overview</h2>
-          <span className={`text-xs ${themeColors.textSecondary}`}>{monthLabel}</span>
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-          </span>
-        </div>
-        {prodTrend !== null && (
-          <div className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${
-            prodTrend >= 0 ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500'
-          }`}>
-            {prodTrend >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-            {Math.abs(prodTrend).toFixed(0)}% vs last month
-          </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-        {kpis.map((kpi) => (
-          <div key={kpi.label} className={`p-3 rounded-xl ${kpi.bg} border ${themeColors.border}`}>
-            <div className="flex items-center gap-1.5 mb-1.5">
-              {kpi.icon}
-              <span className={`text-[10px] uppercase tracking-wider font-medium ${themeColors.textSecondary} truncate`}>
-                {kpi.label}
-              </span>
-            </div>
-            <p className={`text-lg font-bold ${themeColors.text}`}>{kpi.value}</p>
-            {kpi.trend !== null && kpi.trend !== 0 && (
-              <div className={`flex items-center gap-1 mt-1 text-[10px] font-medium ${
-                kpi.trend > 0 ? 'text-green-500' : 'text-red-400'
-              }`}>
-                {kpi.trend > 0 ? <TrendingUp className="w-2.5 h-2.5" /> : <TrendingDown className="w-2.5 h-2.5" />}
-                {Math.abs(kpi.trend).toFixed(0)}%
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
     </div>
   );
 };
@@ -267,6 +254,7 @@ interface TariffConfig {
   slabs: TariffSlab[];
   non_telescopic_slabs: TariffSlab[];
   billing_days: number;
+  billing_cycle_start_day: number;
   feed_in_tariff: number;
   grid_import_tariff: number;
   currency: string;
@@ -464,6 +452,8 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
           { upper_kwh: 999999, rate: 9.20 },
         ],
         billing_days: 60,
+        billing_cycle_start_day: 1,
+        cycle_end_date: null,
         feed_in_tariff: 3.50,
         grid_import_tariff: 6.00,
         currency: 'INR',
@@ -538,7 +528,7 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
       {/* Billing cycle info */}
       <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-4 sm:p-6`}>
         <h2 className={`text-lg font-bold ${themeColors.text} mb-4`}>Billing Cycle</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <div className={`p-3 rounded-xl ${themeColors.bg} border ${themeColors.border}`}>
             <p className={`text-[10px] uppercase tracking-wider font-medium ${themeColors.textSecondary}`}>Current Usage</p>
             <p className={`text-xl font-bold ${themeColors.text} mt-1`}>{config.billing_kwh.toFixed(1)} <span className="text-xs font-normal">kWh</span></p>
@@ -546,16 +536,6 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
           <div className={`p-3 rounded-xl ${themeColors.bg} border ${themeColors.border}`}>
             <p className={`text-[10px] uppercase tracking-wider font-medium ${themeColors.textSecondary}`}>Active Rate</p>
             <p className={`text-xl font-bold ${themeColors.accent} mt-1`}>₹{config.active_rate.toFixed(2)} <span className="text-xs font-normal">/kWh</span></p>
-          </div>
-          <div className={`p-3 rounded-xl ${themeColors.bg} border ${themeColors.border}`}>
-            <p className={`text-[10px] uppercase tracking-wider font-medium ${themeColors.textSecondary}`}>Cycle Length</p>
-            <p className={`text-xl font-bold ${themeColors.text} mt-1`}>{config.billing_days} <span className="text-xs font-normal">days</span></p>
-          </div>
-          <div className={`p-3 rounded-xl ${themeColors.bg} border ${themeColors.border}`}>
-            <p className={`text-[10px] uppercase tracking-wider font-medium ${themeColors.textSecondary}`}>Cycle Started</p>
-            <p className={`text-sm font-bold ${themeColors.text} mt-1`}>
-              {config.cycle_start ? new Date(config.cycle_start).toLocaleDateString() : '—'}
-            </p>
           </div>
         </div>
       </div>
@@ -656,7 +636,7 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
       {/* Feed-in tariff & billing days */}
       <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-4 sm:p-6`}>
         <h2 className={`text-lg font-bold ${themeColors.text} mb-4`}>Tariff Settings</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
             <label className={`text-xs font-medium ${themeColors.textSecondary} mb-1.5 block`}>Feed-in Tariff ({config.currency}/kWh)</label>
             <input
@@ -677,6 +657,16 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
               className={`w-full px-3 py-2 rounded-xl text-sm ${themeColors.surface} border ${themeColors.border} ${themeColors.text}`}
             />
             <p className={`text-[10px] ${themeColors.textSecondary} mt-1`}>Slab reset period (typically 30 or 60 days)</p>
+          </div>
+          <div>
+            <label className={`text-xs font-medium ${themeColors.textSecondary} mb-1.5 block`}>Cycle End Date</label>
+            <input
+              type="date"
+              value={config.cycle_end_date ? config.cycle_end_date.slice(0, 10) : ''}
+              onChange={(e) => setConfig({ ...config, cycle_end_date: e.target.value ? `${e.target.value}T00:00:00+00:00` : null })}
+              className={`w-full px-3 py-2 rounded-xl text-sm ${themeColors.surface} border ${themeColors.border} ${themeColors.text}`}
+            />
+            <p className={`text-[10px] ${themeColors.textSecondary} mt-1`}>Optional: cycle auto-finalizes on this date</p>
           </div>
           <div>
             <label className={`text-xs font-medium ${themeColors.textSecondary} mb-1.5 block`}>Currency</label>
@@ -716,13 +706,46 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
   );
 };
 
+const scrollbarThumbColor: Record<string, string> = {
+  morning: '#E87A2A',
+  afternoon: '#1A7AE8',
+  evening: '#C45D3A',
+  night: '#5BA3F5',
+};
+
+const OfflineBanner: React.FC = () => {
+  const online = useNetworkStatus();
+  const { themeColors } = useTheme();
+  if (online) return null;
+  return (
+    <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500/90 text-white text-center text-xs font-medium py-1.5 px-4 flex items-center justify-center gap-2">
+      <WifiOff className="w-3.5 h-3.5" />
+      Offline — showing cached data
+    </div>
+  );
+};
+
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
-  const { themeColors } = useTheme();
+  const { themeColors, timeOfDay } = useTheme();
 
   return (
-    <div className={`min-h-screen overflow-x-hidden ${themeColors.bg} transition-colors duration-[2000ms]`}>
+    <div className={`h-screen overflow-y-auto overflow-x-hidden ${themeColors.bg} transition-colors duration-[2000ms]`} style={{ scrollbarGutter: 'stable' }}>
+      <style>{`
+        html, body { height: 100%; overflow: hidden; }
+        ::-webkit-scrollbar { width: 3px; height: 3px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+          background: ${scrollbarThumbColor[timeOfDay] || '#888'}99;
+          border-radius: 2px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: ${scrollbarThumbColor[timeOfDay] || '#888'};
+        }
+        * { scrollbar-width: thin; scrollbar-color: ${scrollbarThumbColor[timeOfDay] || '#888'} transparent; }
+      `}</style>
       <WeatherBackground />
+      <OfflineBanner />
       <Header />
       <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
 
