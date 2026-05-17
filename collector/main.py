@@ -665,10 +665,10 @@ class AlertEval:
 # Main collector orchestrator
 # ---------------------------------------------------------------------------
 class Collector:
-    def __init__(self):
+    def __init__(self, pool: Optional[asyncpg.Pool] = None, rd: Optional[aioredis.Redis] = None):
         self.session: Optional[aiohttp.ClientSession] = None
-        self.rd: Optional[aioredis.Redis] = None
-        self.db: Optional[asyncpg.Pool] = None
+        self.rd: Optional[aioredis.Redis] = rd
+        self.db: Optional[asyncpg.Pool] = pool
         self.auth: Optional[DeyeAuth] = None
         self.client: Optional[DeyeClient] = None
         self.buf: Optional[Buffer] = None
@@ -687,13 +687,15 @@ class Collector:
                 "Content-Type": "application/json",
             },
         )
-        self.rd = aioredis.from_url(
-            Cfg.REDIS_URL, decode_responses=True, max_connections=5
-        )
-        await self.rd.ping()
-        self.db = await asyncpg.create_pool(Cfg.DATABASE_URL, min_size=2, max_size=10)
-        async with self.db.acquire() as c:
-            await c.fetchval("SELECT 1")
+        if self.rd is None:
+            self.rd = aioredis.from_url(
+                Cfg.REDIS_URL, decode_responses=True, max_connections=5
+            )
+            await self.rd.ping()
+        if self.db is None:
+            self.db = await asyncpg.create_pool(Cfg.DATABASE_URL, min_size=2, max_size=10)
+            async with self.db.acquire() as c:
+                await c.fetchval("SELECT 1")
         self.auth = DeyeAuth(self.session)
         await self.auth.login()
         self.client = DeyeClient(self.session, self.auth)

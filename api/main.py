@@ -285,6 +285,27 @@ async def redis_bridge():
 
 
 # ---------------------------------------------------------------------------
+# FakeRedis — in-memory fallback when no Redis available
+# ---------------------------------------------------------------------------
+class FakeRedis:
+    _store: dict = {}
+    async def get(self, key): return self._store.get(key)
+    async def set(self, key, value): self._store[key] = value
+    async def delete(self, key): self._store.pop(key, None)
+    async def ping(self): return True
+    async def close(self): pass
+    def pubsub(self): return self
+    async def psubscribe(self, *a, **kw): pass
+    async def subscribe(self, *a, **kw): pass
+    async def unsubscribe(self, *a, **kw): pass
+    def listen(self): return self
+    def __aiter__(self): return self
+    async def __anext__(self):
+        await asyncio.sleep(3600)
+        return {"type": "message", "data": "{}", "channel": ""}
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 _start_time = datetime.now(timezone.utc)
@@ -294,18 +315,53 @@ _start_time = datetime.now(timezone.utc)
 async def lifespan(app: FastAPI):
     global db_pool, redis
     db_pool = await asyncpg.create_pool(settings.database_url, min_size=3, max_size=15)
-    redis = aioredis.from_url(
-        settings.redis_url, decode_responses=True, max_connections=10
-    )
-    await redis.ping()
-    log.info("Connected to PostgreSQL and Redis")
+    try:
+        if settings.redis_url:
+            redis = aioredis.from_url(
+                settings.redis_url, decode_responses=True, max_connections=10
+            )
+            await redis.ping()
+            log.info("Connected to PostgreSQL and Redis")
+        else:
+            redis = FakeRedis()
+            log.info("No Redis URL set — using in-memory fallback")
+    except Exception as e:
+        redis = FakeRedis()
+        log.warning("Redis connection failed (%s) — using in-memory fallback", e)
 
-    bridge_task = asyncio.create_task(redis_bridge())
+    bridge_task = asyncio.create_task(redis_bridge()) if not isinstance(redis, FakeRedis) else None
+
+    collector_task: Optional[asyncio.Task] = None
+    if os.getenv("COLLECTOR_ENABLED", "1") == "1":
+        try:
+            import sys
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+            from collector.main import Collector
+
+            c = Collector(pool=db_pool, rd=redis if not isinstance(redis, FakeRedis) else None)
+            await c.start()
+            async def _run_collector():
+                try:
+                    await c.run()
+                finally:
+                    await c.stop()
+            collector_task = asyncio.create_task(_run_collector())
+            log.info("Collector running in background")
+        except Exception as e:
+            log.warning("Collector failed to start (%s) — API continues without it", e)
+
     yield
-    bridge_task.cancel()
+    if bridge_task:
+        bridge_task.cancel()
+    if collector_task:
+        collector_task.cancel()
+        try:
+            await asyncio.wait_for(collector_task, timeout=15)
+        except asyncio.TimeoutError:
+            pass
     if db_pool:
         await db_pool.close()
-    if redis:
+    if redis and not isinstance(redis, FakeRedis):
         await redis.close()
     log.info("Shutdown complete")
 

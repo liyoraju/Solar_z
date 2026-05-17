@@ -15,6 +15,7 @@ WORKDIR /app
 COPY api/requirements.txt .
 RUN uv pip install --system -r requirements.txt
 COPY api/ .
+COPY collector/ ./collector/
 COPY --from=frontend-builder /build/dist ./static
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"]
