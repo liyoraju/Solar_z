@@ -702,6 +702,7 @@ class Collector:
         self.buf = Buffer(self.rd)
         self.ae = AlertEval(self.rd, self.db)
         await self._init_billing()
+        await self._backfill_history()
         await self._refresh_views()
         await self._backfill_initial_cycle()
         await self.rd.set("collector:status", "running")
@@ -995,40 +996,38 @@ class Collector:
                 except Exception:
                     pass
 
-    async def _check_offline(self):
-        try:
-            async with self.db.acquire() as c:
-                rows = await c.fetch(
-                    """UPDATE inverters SET status='offline'
-                       WHERE last_seen < NOW() - ($1 || ' seconds')::INTERVAL AND status='online'
-                       RETURNING serial_number""",
-                    str(Cfg.ALERT_OFFLINE_S),
-                )
-                for r in rows:
-                    msg = (
-                        f"Inverter {r['serial_number']} offline >{Cfg.ALERT_OFFLINE_S}s"
-                    )
-                    await c.execute(
-                        "INSERT INTO alerts (inverter_sn,alert_type,severity,message) VALUES ($1,'inverter_offline','critical',$2)",
-                        r["serial_number"],
-                        msg,
-                    )
-                    await self.rd.publish(
-                        "solar:alerts",
-                        json.dumps(
-                            {
-                                "inverter_sn": r["serial_number"],
-                                "type": "inverter_offline",
-                                "severity": "critical",
-                                "message": msg,
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            }
-                        ),
-                    )
-        except Exception as e:
-            log.error("offline check: %s", e)
+    async def _backfill_history(self, days: int = 90):
+        log.info("History backfill: last %d days…", days)
+        now = datetime.now(timezone.utc)
+        tariff_cfg = await Cfg.load_tariff_from_redis(self.rd)
+        total = 0
+        for offset in range(days, 0, -10):
+            chunk_end = now - timedelta(days=offset - 1)
+            chunk_start = now - timedelta(days=min(offset + 9, days))
+            data = await self.client.history(
+                int(chunk_start.timestamp()), int(chunk_end.timestamp()), "day"
+            )
+            if not data:
+                continue
+            for r in data:
+                total_h = _float(r.get("eTotalLoad"))
+                billing_h = await self._billing_consumption_kwh(total_h)
+                tariff_h = Cfg.effective_import_tariff_dynamic(billing_h, tariff_cfg)
+                t = normalise(r, Cfg.INVERTER_SN or r.get("sn", "unknown"), import_tariff=tariff_h, feed_in_tariff=tariff_cfg["feed_in_tariff"])
+                if "time" in r and r["time"]:
+                    try:
+                        t["time"] = datetime.fromtimestamp(int(r["time"]), tz=timezone.utc)
+                    except (ValueError, TypeError):
+                        dt = datetime.fromisoformat(r["time"]) if isinstance(r["time"], str) else r["time"]
+                        t["time"] = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                try:
+                    await self._store(t)
+                    total += 1
+                except Exception:
+                    pass
+            await asyncio.sleep(2)
+        log.info("History backfill complete: %d records stored", total)
 
-    # -- materialized view refresh ------------------------------------------
     async def _refresh_views(self):
         try:
             async with self.db.acquire() as c:
@@ -1086,6 +1085,39 @@ class Collector:
                 await self.rd.set("consumption:billing:snapshot", str(row["load"]))
         except Exception as e:
             log.warning("Cycle backfill: %s", e)
+
+    async def _check_offline(self):
+        try:
+            async with self.db.acquire() as c:
+                rows = await c.fetch(
+                    """UPDATE inverters SET status='offline'
+                       WHERE last_seen < NOW() - ($1 || ' seconds')::INTERVAL AND status='online'
+                       RETURNING serial_number""",
+                    str(Cfg.ALERT_OFFLINE_S),
+                )
+                for r in rows:
+                    msg = (
+                        f"Inverter {r['serial_number']} offline >{Cfg.ALERT_OFFLINE_S}s"
+                    )
+                    await c.execute(
+                        "INSERT INTO alerts (inverter_sn,alert_type,severity,message) VALUES ($1,'inverter_offline','critical',$2)",
+                        r["serial_number"],
+                        msg,
+                    )
+                    await self.rd.publish(
+                        "solar:alerts",
+                        json.dumps(
+                            {
+                                "inverter_sn": r["serial_number"],
+                                "type": "inverter_offline",
+                                "severity": "critical",
+                                "message": msg,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                        ),
+                    )
+        except Exception as e:
+            log.error("offline check: %s", e)
 
     # -- main loop ----------------------------------------------------------
     async def run(self):
