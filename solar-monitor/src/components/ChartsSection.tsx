@@ -314,7 +314,7 @@ export const ChartsSection: React.FC = () => {
             {tabs.map((tab) => (
               <button
                 key={tab.key}
-                onClick={() => { setActiveTab(tab.key); if (tab.key === 'hourly' || tab.key === 'production') setZoomIndex(3); }}
+                onClick={() => { setActiveTab(tab.key); if (tab.key !== 'hourly' && tab.key !== 'production') setZoomIndex(3); }}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-300 whitespace-nowrap ${
                   activeTab === tab.key
                     ? `${themeColors.accentLight} ${themeColors.accent}`
