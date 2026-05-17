@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ThemeProvider, useTheme, TimeOfDay, ThemeColors, themeLabels, themeIcons } from './hooks/useTheme';
 import { useTariffConfig, useCycleStatus } from './hooks/useApi';
 import { WeatherBackground } from './components/WeatherBackground';
@@ -729,7 +729,7 @@ const OfflineBanner: React.FC = () => {
 const PREFETCH_DAILY = 90;
 const PREFETCH_HOURLY_LIMIT = 168;
 
-const prefetchAndCache = useCallback(async (url: string, store: string, key: string) => {
+async function prefetchAndCache(url: string, store: string, key: string) {
   try {
     const res = await fetch(url);
     if (res.ok) {
@@ -737,7 +737,7 @@ const prefetchAndCache = useCallback(async (url: string, store: string, key: str
       await idbSave(store, key, json);
     }
   } catch {}
-}, []);
+}
 
 const useOfflinePrefetch = () => {
   useEffect(() => {
