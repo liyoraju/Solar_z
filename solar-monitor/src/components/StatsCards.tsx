@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, TrendingUp, TrendingDown, Activity, Sun, ArrowUpRight } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, Activity, Sun } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { useOverview } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -124,8 +124,27 @@ export const StatsCards: React.FC = () => {
       />
       <StatCard
         title="System Status"
-        value={overview?.status === 'online' ? 'Online' : 'Offline'}
-        icon={<ArrowUpRight className={`w-5 h-5 ${overview?.status === 'online' ? 'text-green-500' : 'text-red-500'}`} />}
+        value={(() => {
+          if (overview?.fault_active) return 'Fault';
+          if (overview?.status === 'offline') return 'Offline';
+          if (overview?.working_mode === 0) return 'Standby';
+          return 'Online';
+        })()}
+        icon={
+          <div className={`w-5 h-5 rounded-full flex items-center justify-center ${
+            overview?.fault_active ? 'text-red-500' :
+            overview?.status === 'offline' ? 'text-red-500' :
+            overview?.working_mode === 0 ? 'text-amber-500' :
+            'text-green-500'
+          }`}>
+            <div className={`w-3 h-3 rounded-full ${
+              overview?.fault_active ? 'bg-red-500 animate-pulse' :
+              overview?.status === 'offline' ? 'bg-red-500' :
+              overview?.working_mode === 0 ? 'bg-amber-500' :
+              'bg-green-500'
+            }`} />
+          </div>
+        }
         color={accentColors.primary}
         bgColor={accentColors.bg}
       />

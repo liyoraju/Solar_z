@@ -146,6 +146,8 @@ class Overview(BaseModel):
     total_savings: float = 0
     fault_active: bool = False
     uptime_samples: int = 0
+    inverter_status: Optional[int] = None
+    working_mode: Optional[int] = None
 
 
 class ConfigUpdate(BaseModel):
@@ -625,6 +627,8 @@ async def analytics_overview():
                 fault_active=bool(
                     latest["fault_code"] and int(latest["fault_code"]) != 0
                 ),
+                inverter_status=latest.get("inverter_status"),
+                working_mode=latest.get("working_mode"),
             )
     except Exception as e:
         raise HTTPException(500, str(e))

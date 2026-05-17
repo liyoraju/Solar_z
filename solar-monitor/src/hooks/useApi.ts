@@ -43,6 +43,8 @@ export interface OverviewData {
   total_savings: number;
   fault_active: boolean;
   uptime_samples: number;
+  inverter_status?: number;
+  working_mode?: number;
 }
 
 export interface FinancialData {
