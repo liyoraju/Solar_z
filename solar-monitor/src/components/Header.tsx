@@ -3,6 +3,7 @@ import { Sun, Sunrise, Sunset, Moon, Bell, Wifi, WifiOff, Zap, CheckCircle, X, A
 import { useTheme } from '../hooks/useTheme';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { formatTime, formatDate, getGreeting } from '../utils/helpers';
+import { apiFetch } from '../services/apiConfig';
 
 interface AlertItem {
   id: number;
@@ -43,7 +44,7 @@ export const Header: React.FC = () => {
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
-        const res = await fetch('/api/alerts?limit=20');
+        const res = await apiFetch('/api/alerts?limit=20');
         if (res.ok) {
           const data = await res.json();
           setAlerts(data.filter(ignorePhaseAlerts));
@@ -79,7 +80,7 @@ export const Header: React.FC = () => {
 
   const handleAck = async (id: number) => {
     try {
-      await fetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' });
+      await apiFetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' });
       setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a));
     } catch {}
   };

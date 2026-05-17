@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { AlertTriangle, CheckCircle, Info, XCircle, Bell, Clock } from 'lucide-react';
+import { apiFetch } from '../services/apiConfig';
 
 interface AlertItem {
   id: number;
@@ -36,7 +37,7 @@ export const AlertsPanel: React.FC = () => {
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
-        const res = await fetch('/api/alerts?limit=20');
+        const res = await apiFetch('/api/alerts?limit=20');
         if (res.ok) setAlerts(await res.json());
       } catch {}
     };
@@ -49,7 +50,7 @@ export const AlertsPanel: React.FC = () => {
 
   const handleAck = async (id: number) => {
     try {
-      await fetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' });
+      await apiFetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' });
       setAlerts(prev => prev.map(a => a.id === id ? { ...a, acknowledged: true } : a));
     } catch {}
   };

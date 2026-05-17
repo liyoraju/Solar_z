@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { save as localStorageSave, load as localStorageLoad } from '../services/offlineStorage';
 import { idbSave, idbLoad } from '../services/offlineDB';
+import { getApiBaseUrl } from '../services/apiConfig';
 
 const CACHE_STORE: Record<string, string> = {
   overview: 'overview',
@@ -62,7 +63,7 @@ export interface FinancialData {
 
 async function fetchWithCache<T>(url: string, cacheKey: string, fallback: T): Promise<T> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(`${getApiBaseUrl()}${url}`);
     if (res.ok) {
       const json = await res.json();
       const store = CACHE_STORE[cacheKey] || 'telemetry';

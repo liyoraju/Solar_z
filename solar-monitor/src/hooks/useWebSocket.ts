@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { save as cacheSave, load as cacheLoad } from '../services/offlineStorage';
 import { idbSave, idbLoad } from '../services/offlineDB';
+import { getApiBaseUrl, apiFetch } from '../services/apiConfig';
 
 export interface TelemetryData {
   time: string;
@@ -57,7 +58,7 @@ export function useWebSocket() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   const connect = useCallback(() => {
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/ws/telemetry`;
+    const wsUrl = `${getApiBaseUrl().replace(/^http/, 'ws')}/api/ws/telemetry`;
 
     try {
       const ws = new WebSocket(wsUrl);
@@ -115,7 +116,7 @@ export function useWebSocket() {
 
     const poll = async () => {
       try {
-        const res = await fetch('/api/telemetry/realtime');
+        const res = await apiFetch('/api/telemetry/realtime');
         if (res.ok) {
           const data = await res.json();
           setTelemetry(data);

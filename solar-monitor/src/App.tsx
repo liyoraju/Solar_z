@@ -11,6 +11,7 @@ import { FinancialOverview } from './components/FinancialOverview';
 import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, AlertCircle, WifiOff } from 'lucide-react';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { idbSave } from './services/offlineDB';
+import { getApiBaseUrl, setApiBaseUrl, apiFetch } from './services/apiConfig';
 
 type Tab = 'dashboard' | 'telemetry' | 'reports' | 'settings';
 
@@ -85,7 +86,7 @@ const CycleEndBanner: React.FC = () => {
   const handleFinalize = async () => {
     setFinalizing(true);
     try {
-      const res = await fetch('/api/analytics/billing-cycle/finalize', {
+      const res = await apiFetch('/api/analytics/billing-cycle/finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ notes }),
@@ -266,7 +267,7 @@ interface TariffConfig {
 
 const SettingsContent: React.FC = () => {
   const { themeColors, activeTheme, setTheme, isAutoTheme, setIsAutoTheme } = useTheme();
-  const [activeSection, setActiveSection] = useState<'general' | 'appearance' | 'financial'>('appearance');
+  const [activeSection, setActiveSection] = useState<'general' | 'appearance' | 'financial' | 'server'>('appearance');
 
   const themeIconMap: Record<TimeOfDay, React.ReactNode> = {
     morning: <Sunrise className="w-6 h-6" />,
@@ -284,6 +285,7 @@ const SettingsContent: React.FC = () => {
 
   const sections = [
     { key: 'general' as const, label: 'General', icon: <Settings className="w-4 h-4" /> },
+    { key: 'server' as const, label: 'Server', icon: <Zap className="w-4 h-4" /> },
     { key: 'appearance' as const, label: 'Appearance', icon: <Palette className="w-4 h-4" /> },
     { key: 'financial' as const, label: 'Financial', icon: <IndianRupee className="w-4 h-4" /> },
   ];
@@ -316,6 +318,8 @@ const SettingsContent: React.FC = () => {
           <p className={`text-sm ${themeColors.textSecondary}`}>General settings coming soon.</p>
         </div>
       )}
+
+      {activeSection === 'server' && <ServerSettings themeColors={themeColors} />}
 
       {activeSection === 'appearance' && (
         <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-6`}>
@@ -430,7 +434,7 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
 
   const fetchTariffConfig = async () => {
     try {
-      const res = await fetch('/api/config/tariff');
+      const res = await apiFetch('/api/config/tariff');
       if (res.ok) {
         const data = await res.json();
         setConfig(data);
@@ -472,7 +476,7 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/config/tariff', {
+      const res = await apiFetch('/api/config/tariff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(config),
@@ -707,6 +711,46 @@ const FinancialSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors
   );
 };
 
+const ServerSettings: React.FC<{ themeColors: ThemeColors }> = ({ themeColors }) => {
+  const [serverUrl, setServerUrl] = useState(getApiBaseUrl());
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = () => {
+    setApiBaseUrl(serverUrl.replace(/\/+$/, ''));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className={`rounded-2xl ${themeColors.surface} ${themeColors.cardShadow} p-6`}>
+      <h2 className={`text-lg font-bold ${themeColors.text} mb-4`}>Server Connection</h2>
+      <p className={`text-xs ${themeColors.textSecondary} mb-4`}>
+        Set the API server URL. Use the Render URL for cloud mode, or enter a local IP (e.g. http://192.168.1.100:8000) to talk directly to your collector on the local network.
+      </p>
+      <div className="flex gap-3">
+        <input
+          type="text"
+          value={serverUrl}
+          onChange={(e) => setServerUrl(e.target.value)}
+          placeholder="https://solar-z.onrender.com"
+          className={`flex-1 px-3 py-2 rounded-xl text-sm ${themeColors.surface} border ${themeColors.border} ${themeColors.text}`}
+        />
+        <button
+          onClick={handleSave}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+            saved
+              ? 'bg-green-500/20 text-green-500'
+              : `${themeColors.accentLight} ${themeColors.accent} hover:opacity-90`
+          }`}
+        >
+          {saved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+          {saved ? 'Saved' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const scrollbarThumbColor: Record<string, string> = {
   morning: '#E87A2A',
   afternoon: '#1A7AE8',
@@ -731,7 +775,7 @@ const PREFETCH_HOURLY_LIMIT = 168;
 
 async function prefetchAndCache(url: string, store: string, key: string) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(`${getApiBaseUrl()}${url}`);
     if (res.ok) {
       const json = await res.json();
       await idbSave(store, key, json);
