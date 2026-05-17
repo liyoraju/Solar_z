@@ -260,8 +260,8 @@ export const ChartsSection: React.FC = () => {
   ].filter(d => d.value > 0);
 
   const tabs: { key: ChartTab; label: string; icon: React.ReactNode }[] = [
-    { key: 'hourly', label: 'Hourly', icon: <Clock className="w-4 h-4" /> },
-    { key: 'daily', label: 'Daily', icon: <Calendar className="w-4 h-4" /> },
+    { key: 'hourly', label: 'Power', icon: <Clock className="w-4 h-4" /> },
+    { key: 'daily', label: 'Savings', icon: <Calendar className="w-4 h-4" /> },
     { key: 'cycles', label: 'Cycles', icon: <BarChart3 className="w-4 h-4" /> },
     { key: 'production', label: 'Production', icon: <Activity className="w-4 h-4" /> },
     { key: 'distribution', label: 'Distribution', icon: <PieIcon className="w-4 h-4" /> },
