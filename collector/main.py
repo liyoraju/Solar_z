@@ -1031,9 +1031,11 @@ class Collector:
     async def _refresh_views(self):
         try:
             async with self.db.acquire() as c:
-                await c.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_daily")
-                await c.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_monthly")
-                await c.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY telemetry_monthly_deltas")
+                for mv in ("telemetry_daily", "telemetry_monthly", "telemetry_monthly_deltas"):
+                    try:
+                        await c.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv}")
+                    except Exception:
+                        await c.execute(f"REFRESH MATERIALIZED VIEW {mv}")
             log.info("Materialized views refreshed")
         except Exception as e:
             log.warning("Refresh materialized views: %s", e)

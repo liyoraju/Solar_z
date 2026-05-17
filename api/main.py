@@ -494,7 +494,9 @@ async def telemetry_history(
 async def telemetry_daily(sn: Optional[str] = None, days: int = Query(30, le=365)):
     try:
         async with db_pool.acquire() as c:
-            q = """SELECT day::text AS time, avg_pv1_power, peak_pv1_power,
+            q = """SELECT day::text AS time,
+                          COALESCE(avg_pv1_power,0) + COALESCE(avg_pv2_power,0) AS avg_pv_power,
+                          COALESCE(peak_pv1_power,0) + COALESCE(peak_pv2_power,0) AS peak_pv_power,
                           avg_inverter_power, peak_inverter_power,
                           max_temperature, avg_frequency,
                           daily_production_kwh, daily_savings, sample_count
