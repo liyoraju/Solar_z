@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { save as cacheSave, load as cacheLoad } from '../services/offlineStorage';
+import { idbSave, idbLoad } from '../services/offlineDB';
 
 export interface TelemetryData {
   time: string;
@@ -72,11 +73,13 @@ export function useWebSocket() {
           if (data.type === 'telemetry') {
             setTelemetry(data.payload);
             cacheSave('telemetry', data.payload);
+            idbSave('telemetry', 'live_telemetry', data.payload);
           } else if (data.type === 'alert') {
             setAlerts((prev) => [data.payload, ...prev].slice(0, 50));
           } else {
             setTelemetry(data);
             cacheSave('telemetry', data);
+            idbSave('telemetry', 'live_telemetry', data);
           }
         } catch {
           // Raw telemetry data
@@ -117,11 +120,14 @@ export function useWebSocket() {
           const data = await res.json();
           setTelemetry(data);
           cacheSave('telemetry', data);
+          idbSave('telemetry', 'live_telemetry', data);
           return;
         }
       } catch {
         // Silently fail
       }
+      const idbCached = await idbLoad<any>('telemetry', 'live_telemetry');
+      if (idbCached) return void setTelemetry(idbCached);
       const cached = await cacheLoad<any>('telemetry');
       if (cached) setTelemetry(cached);
     };

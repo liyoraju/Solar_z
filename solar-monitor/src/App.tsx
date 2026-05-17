@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ThemeProvider, useTheme, TimeOfDay, ThemeColors, themeLabels, themeIcons } from './hooks/useTheme';
 import { useTariffConfig, useCycleStatus } from './hooks/useApi';
 import { WeatherBackground } from './components/WeatherBackground';
@@ -10,6 +10,7 @@ import { SolarHouseVisualization } from './components/SolarHouseVisualization';
 import { FinancialOverview } from './components/FinancialOverview';
 import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, AlertCircle, WifiOff } from 'lucide-react';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
+import { idbSave } from './services/offlineDB';
 
 type Tab = 'dashboard' | 'telemetry' | 'reports' | 'settings';
 
@@ -725,9 +726,42 @@ const OfflineBanner: React.FC = () => {
   );
 };
 
+const PREFETCH_DAILY = 90;
+const PREFETCH_HOURLY_LIMIT = 168;
+
+const prefetchAndCache = useCallback(async (url: string, store: string, key: string) => {
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const json = await res.json();
+      await idbSave(store, key, json);
+    }
+  } catch {}
+}, []);
+
+const useOfflinePrefetch = () => {
+  useEffect(() => {
+    prefetchAndCache(`/api/telemetry/daily?days=${PREFETCH_DAILY}`, 'daily_history', 'history');
+    prefetchAndCache(`/api/telemetry/history?interval=1+hour&limit=${PREFETCH_HOURLY_LIMIT}`, 'hourly_history', 'hourly_history');
+    prefetchAndCache('/api/analytics/billing-cycles?months=12', 'billing_cycles', 'billing_cycles');
+    prefetchAndCache('/api/analytics/overview', 'overview', 'overview');
+    prefetchAndCache('/api/analytics/financial', 'financial', 'financial');
+    prefetchAndCache('/api/analytics/monthly?months=12', 'billing_cycles', 'monthly_stats');
+
+    const interval = setInterval(() => {
+      prefetchAndCache(`/api/telemetry/daily?days=${PREFETCH_DAILY}`, 'daily_history', 'history');
+      prefetchAndCache(`/api/telemetry/history?interval=1+hour&limit=${PREFETCH_HOURLY_LIMIT}`, 'hourly_history', 'hourly_history');
+      prefetchAndCache('/api/analytics/billing-cycles?months=12', 'billing_cycles', 'billing_cycles');
+    }, 86400000);
+
+    return () => clearInterval(interval);
+  }, []);
+};
+
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const { themeColors, timeOfDay } = useTheme();
+  useOfflinePrefetch();
 
   return (
     <div className={`h-screen overflow-y-auto overflow-x-hidden ${themeColors.bg} transition-colors duration-[2000ms]`} style={{ scrollbarGutter: 'stable' }}>

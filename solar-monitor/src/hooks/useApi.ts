@@ -1,5 +1,20 @@
 import { useEffect, useState } from 'react';
-import { save as cacheSave, load as cacheLoad } from '../services/offlineStorage';
+import { save as localStorageSave, load as localStorageLoad } from '../services/offlineStorage';
+import { idbSave, idbLoad } from '../services/offlineDB';
+
+const CACHE_STORE: Record<string, string> = {
+  overview: 'overview',
+  financial: 'financial',
+  tariff_config: 'overview',
+  billing_cycles: 'billing_cycles',
+  monthly_stats: 'billing_cycles',
+  history: 'daily_history',
+  hourly_history: 'hourly_history',
+  daily_aggregates: 'daily_history',
+  cycle_status: 'overview',
+  billing_reports: 'billing_cycles',
+  telemetry_history: 'telemetry',
+};
 
 export interface HistoryPoint {
   time: string;
@@ -48,12 +63,19 @@ async function fetchWithCache<T>(url: string, cacheKey: string, fallback: T): Pr
     const res = await fetch(url);
     if (res.ok) {
       const json = await res.json();
-      await cacheSave(cacheKey, json);
+      const store = CACHE_STORE[cacheKey] || 'telemetry';
+      await Promise.all([
+        localStorageSave(cacheKey, json),
+        idbSave(store, cacheKey, json),
+      ]);
       return json;
     }
   } catch {
-    const cached = await cacheLoad<T>(cacheKey);
-    if (cached) return cached;
+    const store = CACHE_STORE[cacheKey] || 'telemetry';
+    const idbCached = await idbLoad<T>(store, cacheKey);
+    if (idbCached) return idbCached;
+    const localCached = await localStorageLoad<T>(cacheKey);
+    if (localCached) return localCached;
   }
   return fallback;
 }
