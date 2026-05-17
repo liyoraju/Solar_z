@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  AreaChart, Area, BarChart, Bar, LineChart, Line,
+  AreaChart, Area, BarChart, Bar,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, ReferenceLine
 } from 'recharts';
 import { useTheme } from '../hooks/useTheme';
-import { useTelemetryHistory, useDailyAggregates, useHistory, useBillingCycles, HistoryPoint } from '../hooks/useApi';
+import { useTelemetryHistory, useDailyAggregates, useHistory, useBillingCycles } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { formatNumber } from '../utils/helpers';
-import { TrendingUp, Calendar, Clock, BarChart3, PieChart as PieIcon, Activity, ZoomIn, ZoomOut } from 'lucide-react';
+import { Calendar, Clock, BarChart3, PieChart as PieIcon, Activity, ZoomIn, ZoomOut } from 'lucide-react';
 
 type ChartTab = 'hourly' | 'daily' | 'cycles' | 'production' | 'distribution';
 

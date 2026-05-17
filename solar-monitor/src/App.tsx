@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ThemeProvider, useTheme, TimeOfDay, ThemeColors, themeLabels, themeIcons } from './hooks/useTheme';
-import { useTariffConfig, useCycleStatus } from './hooks/useApi';
+import { useCycleStatus } from './hooks/useApi';
 import { WeatherBackground } from './components/WeatherBackground';
 import { Header } from './components/Header';
 import { StatsCards } from './components/StatsCards';
@@ -760,7 +760,6 @@ const scrollbarThumbColor: Record<string, string> = {
 
 const OfflineBanner: React.FC = () => {
   const online = useNetworkStatus();
-  const { themeColors } = useTheme();
   if (online) return null;
   return (
     <div className="fixed top-0 left-0 right-0 z-50 bg-amber-500/90 text-white text-center text-xs font-medium py-1.5 px-4 flex items-center justify-center gap-2">

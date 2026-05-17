@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, TrendingUp, TrendingDown, Activity, Sun } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, Sun } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { useOverview } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -12,7 +12,6 @@ interface StatCardProps {
   icon: React.ReactNode;
   trend?: number;
   trendLabel?: string;
-  color: string;
   bgColor: string;
   progress?: number;
   progressColor?: string;
@@ -25,7 +24,6 @@ const StatCard: React.FC<StatCardProps> = ({
   icon,
   trend,
   trendLabel,
-  color,
   bgColor,
   progress,
   progressColor,
@@ -66,7 +64,7 @@ const StatCard: React.FC<StatCardProps> = ({
 };
 
 export const StatsCards: React.FC = () => {
-  const { themeColors, timeOfDay } = useTheme();
+  const { timeOfDay } = useTheme();
   const { data: overview } = useOverview();
   const { telemetry } = useWebSocket();
 
@@ -93,7 +91,6 @@ export const StatsCards: React.FC = () => {
         icon={<Sun className={`w-5 h-5 ${accentColors.primary}`} />}
         trend={12.5}
         trendLabel="vs yesterday"
-        color={accentColors.primary}
         bgColor={accentColors.bg}
       />
       <StatCard
@@ -101,7 +98,6 @@ export const StatsCards: React.FC = () => {
         value={formatNumber(loadPower, 0)}
         unit="W"
         icon={<Zap className={`w-5 h-5 ${accentColors.primary}`} />}
-        color={accentColors.primary}
         bgColor={accentColors.bg}
       />
       <StatCard
@@ -111,7 +107,6 @@ export const StatsCards: React.FC = () => {
         icon={<Sun className={`w-5 h-5 ${accentColors.primary}`} />}
         trend={8.3}
         trendLabel="vs avg"
-        color={accentColors.primary}
         bgColor={accentColors.bg}
       />
       <StatCard
@@ -119,7 +114,6 @@ export const StatsCards: React.FC = () => {
         value={formatCurrency(dailySavings, 'INR')}
         icon={<TrendingUp className={`w-5 h-5 ${accentColors.primary}`} />}
         trend={15.2}
-        color={accentColors.primary}
         bgColor={accentColors.bg}
       />
       <StatCard
@@ -145,7 +139,6 @@ export const StatsCards: React.FC = () => {
             }`} />
           </div>
         }
-        color={accentColors.primary}
         bgColor={accentColors.bg}
       />
     </div>

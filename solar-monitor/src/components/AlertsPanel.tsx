@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { useTheme } from '../hooks/useTheme';
-import { useWebSocket } from '../hooks/useWebSocket';
 import { AlertTriangle, CheckCircle, Info, XCircle, Bell, Clock } from 'lucide-react';
 import { apiFetch } from '../services/apiConfig';
 

@@ -3,7 +3,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useOverview } from '../hooks/useApi';
 import { formatNumber } from '../utils/helpers';
-import { Zap, Home, ArrowRight, ArrowLeft, Sun } from 'lucide-react';
+import { Home, ArrowRight, ArrowLeft, Sun } from 'lucide-react';
 
 export const SolarHouseVisualization: React.FC = () => {
   const { themeColors, timeOfDay } = useTheme();
