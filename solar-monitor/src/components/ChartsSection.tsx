@@ -111,11 +111,14 @@ const ZOOM_LEVELS: ZoomConfig[] = [
   },
 ];
 
-function cycleRangeLabel(cycle: { cycle_start: string; cycle_end: string | null; is_current: boolean }): string {
+function cycleRangeLabel(cycle: { cycle_start: string; cycle_end: string | null; is_current: boolean; day_count?: number }): string {
   if (cycle.is_current) return 'Current';
   const start = new Date(cycle.cycle_start);
   const end = cycle.cycle_end ? new Date(cycle.cycle_end) : null;
   const startStr = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (cycle.day_count !== undefined && cycle.day_count <= 1) {
+    return `${startStr} (partial)`;
+  }
   const endStr = end ? end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Present';
   return `${startStr} \u2013 ${endStr}`;
 }
@@ -215,13 +218,31 @@ export const ChartsSection: React.FC = () => {
     } catch { return fallback; }
   };
 
-  const dailyProdData = dailyData.map(d => ({
-    day: formatAxisDate(d.time, d.time?.slice(5) || ''),
-    production: d.daily_production_kwh || 0,
-    savings: d.daily_savings || 0,
-  }));
+  const dailyProdData = (() => {
+    const mapped = dailyData.map(d => ({
+      day: formatAxisDate(d.time, d.time?.slice(5) || ''),
+      production: d.daily_production_kwh || 0,
+      savings: d.daily_savings || 0,
+    }));
+    if (telemetry?.daily_savings != null) {
+      const todayStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      const existing = mapped.find(d => d.day === todayStr);
+      if (existing) {
+        existing.savings = telemetry.daily_savings;
+        if (telemetry.daily_production != null) existing.production = telemetry.daily_production;
+      } else {
+        mapped.push({
+          day: todayStr,
+          production: telemetry.daily_production ?? 0,
+          savings: telemetry.daily_savings,
+        });
+      }
+    }
+    return mapped;
+  })();
 
   const cyclesChartData = billingCycles.data
+    .filter(c => c.day_count > 1 || c.is_current)
     .slice()
     .reverse()
     .map(c => ({

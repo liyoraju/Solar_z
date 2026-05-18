@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Sun, Sunrise, Sunset, Moon, Bell, Wifi, WifiOff, Zap, CheckCircle, X, AlertTriangle, Info, XCircle, Clock } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useOverview } from '../hooks/useApi';
 import { formatTime, formatDate, getGreeting } from '../utils/helpers';
 import { apiFetch } from '../services/apiConfig';
 
@@ -34,6 +35,7 @@ function timeAgo(dateStr: string): string {
 export const Header: React.FC = () => {
   const { timeOfDay, currentTime, themeColors } = useTheme();
   const { connected, alerts: wsAlerts } = useWebSocket();
+  const { data: overview } = useOverview();
   const [showDropdown, setShowDropdown] = useState(false);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -130,15 +132,32 @@ export const Header: React.FC = () => {
 
           {/* Right side */}
           <div className="flex items-center gap-2 sm:gap-3">
-            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-white/50 dark:bg-white/5">
-              {connected ? (
-                <Wifi className="w-3.5 h-3.5 text-green-500" />
-              ) : (
-                <WifiOff className="w-3.5 h-3.5 text-red-400" />
-              )}
-              <span className={`text-xs font-medium ${themeColors.textSecondary} hidden sm:inline`}>
-                {connected ? 'Live' : 'Offline'}
-              </span>
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white/50 dark:bg-white/5">
+              <div className="flex items-center gap-1.5">
+                {connected ? (
+                  <Wifi className="w-3.5 h-3.5 text-green-500" />
+                ) : (
+                  <WifiOff className="w-3.5 h-3.5 text-red-400" />
+                )}
+                <span className={`text-xs font-medium ${themeColors.textSecondary} hidden sm:inline`}>
+                  {connected ? 'Live' : 'Offline'}
+                </span>
+              </div>
+              <div className="w-px h-4 bg-gray-300 dark:bg-gray-600" />
+              <div className="flex items-center gap-1.5">
+                <div className={`w-2 h-2 rounded-full ${
+                  overview?.fault_active ? 'bg-red-500 animate-pulse' :
+                  overview?.status === 'offline' ? 'bg-red-500' :
+                  overview?.working_mode === 0 ? 'bg-amber-500' :
+                  'bg-green-500'
+                }`} />
+                <span className={`text-xs font-medium ${themeColors.textSecondary} hidden sm:inline`}>
+                  {overview?.fault_active ? 'Fault' :
+                   overview?.status === 'offline' ? 'Offline' :
+                   overview?.working_mode === 0 ? 'Standby' :
+                   'Online'}
+                </span>
+              </div>
             </div>
             <div className="relative" ref={dropdownRef}>
               <button 

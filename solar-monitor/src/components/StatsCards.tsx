@@ -1,7 +1,7 @@
 import React from 'react';
 import { Zap, TrendingUp, TrendingDown, Sun } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
-import { useOverview } from '../hooks/useApi';
+import { useOverview, useHistory } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { formatNumber, formatCurrency } from '../utils/helpers';
 
@@ -67,6 +67,7 @@ export const StatsCards: React.FC = () => {
   const { timeOfDay } = useTheme();
   const { data: overview } = useOverview();
   const { telemetry } = useWebSocket();
+  const history = useHistory(7);
 
   const accentColors = {
     morning: { primary: 'text-orange-500', bg: 'bg-orange-50', bar: 'bg-orange-400' },
@@ -82,15 +83,32 @@ export const StatsCards: React.FC = () => {
   const dailyProd = telemetry?.daily_production ?? overview?.daily_production ?? 0;
   const dailySavings = telemetry?.daily_savings ?? overview?.daily_savings ?? 0;
 
+  const avgPvPower = (() => {
+    const vals = history.map(h => h.avg_pv_power).filter((v): v is number => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  })();
+  const avgDailyProd = (() => {
+    const vals = history.map(h => h.daily_production_kwh).filter((v): v is number => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  })();
+  const avgDailySavings = (() => {
+    const vals = history.map(h => h.daily_savings).filter((v): v is number => v != null);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  })();
+
+  const pvTrend = avgPvPower > 0 ? ((totalPv - avgPvPower) / avgPvPower) * 100 : 0;
+  const prodTrend = avgDailyProd > 0 ? ((dailyProd - avgDailyProd) / avgDailyProd) * 100 : 0;
+  const savingsTrend = avgDailySavings > 0 ? ((dailySavings - avgDailySavings) / avgDailySavings) * 100 : 0;
+
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
       <StatCard
         title="PV Power"
         value={formatNumber(totalPv, 0)}
         unit="W"
         icon={<Sun className={`w-5 h-5 ${accentColors.primary}`} />}
-        trend={12.5}
-        trendLabel="vs yesterday"
+        trend={Math.round(pvTrend * 10) / 10}
+        trendLabel="vs avg"
         bgColor={accentColors.bg}
       />
       <StatCard
@@ -105,7 +123,7 @@ export const StatsCards: React.FC = () => {
         value={formatNumber(dailyProd, 2)}
         unit="kWh"
         icon={<Sun className={`w-5 h-5 ${accentColors.primary}`} />}
-        trend={8.3}
+        trend={Math.round(prodTrend * 10) / 10}
         trendLabel="vs avg"
         bgColor={accentColors.bg}
       />
@@ -113,32 +131,7 @@ export const StatsCards: React.FC = () => {
         title="Daily Savings"
         value={formatCurrency(dailySavings, 'INR')}
         icon={<TrendingUp className={`w-5 h-5 ${accentColors.primary}`} />}
-        trend={15.2}
-        bgColor={accentColors.bg}
-      />
-      <StatCard
-        title="System Status"
-        value={(() => {
-          if (overview?.fault_active) return 'Fault';
-          if (overview?.status === 'offline') return 'Offline';
-          if (overview?.working_mode === 0) return 'Standby';
-          return 'Online';
-        })()}
-        icon={
-          <div className={`w-5 h-5 rounded-full flex items-center justify-center ${
-            overview?.fault_active ? 'text-red-500' :
-            overview?.status === 'offline' ? 'text-red-500' :
-            overview?.working_mode === 0 ? 'text-amber-500' :
-            'text-green-500'
-          }`}>
-            <div className={`w-3 h-3 rounded-full ${
-              overview?.fault_active ? 'bg-red-500 animate-pulse' :
-              overview?.status === 'offline' ? 'bg-red-500' :
-              overview?.working_mode === 0 ? 'bg-amber-500' :
-              'bg-green-500'
-            }`} />
-          </div>
-        }
+        trend={Math.round(savingsTrend * 10) / 10}
         bgColor={accentColors.bg}
       />
     </div>
