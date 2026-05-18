@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.solarapp.monitor',
+  appId: 'com.solar.monitor',
   appName: 'SolarApp',
   webDir: 'dist',
 };

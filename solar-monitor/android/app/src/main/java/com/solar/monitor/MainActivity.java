@@ -1,4 +1,4 @@
-package com.solarapp.monitor;
+package com.solar.monitor;
 
 import com.getcapacitor.BridgeActivity;
 

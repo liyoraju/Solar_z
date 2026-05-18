@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "53302050395",
+    "project_id": "solarapp-fc9b9",
+    "storage_bucket": "solarapp-fc9b9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:53302050395:android:4b686d764c733e54dcc97e",
+        "android_client_info": {
+          "package_name": "com.solar.monitor"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDzwF5L-ipXkarAFT3xEGNMX6N8H9Toix4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
