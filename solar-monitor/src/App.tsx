@@ -10,6 +10,7 @@ import { SolarHouseVisualization } from './components/SolarHouseVisualization';
 import { FinancialOverview } from './components/FinancialOverview';
 import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, AlertCircle, WifiOff } from 'lucide-react';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
+import { usePushNotifications } from './hooks/usePushNotifications';
 import { idbSave } from './services/offlineDB';
 import { getApiBaseUrl, setApiBaseUrl, apiFetch } from './services/apiConfig';
 
@@ -805,6 +806,7 @@ const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const { themeColors, timeOfDay } = useTheme();
   useOfflinePrefetch();
+  usePushNotifications();
 
   return (
     <div className={`h-screen overflow-y-auto overflow-x-hidden ${themeColors.bg} transition-colors duration-[2000ms]`} style={{ scrollbarGutter: 'stable' }}>

@@ -70,6 +70,7 @@ class Settings(BaseModel):
     feed_in_tariff: float = float(os.getenv("FEED_IN_TARIFF", "3.50"))
     grid_import_tariff: float = float(os.getenv("GRID_IMPORT_TARIFF", "6.00"))
     currency: str = os.getenv("CURRENCY", "INR")
+    firebase_credentials_path: str = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
 
 
 settings = Settings()
@@ -278,6 +279,13 @@ async def redis_bridge():
                         await ws_mgr.broadcast_telemetry(data)
                     elif channel == "solar:alerts":
                         await ws_mgr.broadcast_alert(data)
+                        asyncio.create_task(
+                            send_push_to_all(
+                                title=f"Solar Alert: {data.get('severity', 'info')}",
+                                body=data.get("message", ""),
+                                data={"type": data.get("type", ""), "inverter_sn": data.get("inverter_sn", "")},
+                            )
+                        )
                 except Exception:
                     pass
         except asyncio.CancelledError:
@@ -1601,6 +1609,81 @@ async def gap_report(limit: int = Query(50, le=500)):
                 )
                 for r in rows
             ]
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ---------------------------------------------------------------------------
+# Push Notifications (Firebase Cloud Messaging)
+# ---------------------------------------------------------------------------
+_firebase_app = None
+
+def _ensure_firebase():
+    global _firebase_app
+    if _firebase_app is None and settings.firebase_credentials_path:
+        try:
+            import firebase_admin
+            from firebase_admin import credentials
+            cred = credentials.Certificate(settings.firebase_credentials_path)
+            _firebase_app = firebase_admin.initialize_app(cred)
+        except Exception as e:
+            log.warning("Firebase init failed: %s", e)
+
+
+async def send_push_to_all(title: str, body: str, data: dict | None = None):
+    if not settings.firebase_credentials_path:
+        return
+    _ensure_firebase()
+    if _firebase_app is None:
+        return
+    try:
+        from firebase_admin import messaging
+        async with db_pool.acquire() as c:
+            rows = await c.fetch("SELECT token FROM push_tokens")
+        for row in rows:
+            try:
+                msg = messaging.Message(
+                    notification=messaging.Notification(title=title, body=body),
+                    data={k: str(v) for k, v in (data or {}).items()},
+                    token=row["token"],
+                )
+                messaging.send(msg)
+            except Exception as e:
+                log.error("Push send to token failed: %s", e)
+    except Exception as e:
+        log.error("Push broadcast failed: %s", e)
+
+
+class PushTokenRequest(BaseModel):
+    token: str
+    platform: str = "android"
+
+
+@app.post("/api/push/register")
+async def register_push_token(req: PushTokenRequest):
+    try:
+        async with db_pool.acquire() as c:
+            await c.execute(
+                """INSERT INTO push_tokens (token, platform)
+                   VALUES ($1, $2)
+                   ON CONFLICT (token) DO UPDATE SET
+                       platform = EXCLUDED.platform,
+                       updated_at = NOW()""",
+                req.token,
+                req.platform,
+            )
+        log.info("Push token registered: %s…", req.token[:20])
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/push/unregister")
+async def unregister_push_token(req: PushTokenRequest):
+    try:
+        async with db_pool.acquire() as c:
+            await c.execute("DELETE FROM push_tokens WHERE token = $1", req.token)
+        return {"ok": True}
     except Exception as e:
         raise HTTPException(500, str(e))
 
