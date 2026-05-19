@@ -524,11 +524,17 @@ class Buffer:
 # Alert evaluator
 # ---------------------------------------------------------------------------
 class AlertEval:
+    DEDUP_WINDOW_S = 3600
+
     def __init__(self, rd: aioredis.Redis, pool: asyncpg.Pool):
         self.rd = rd
         self.pool = pool
 
     async def check(self, t: Dict):
+        hour = datetime.now(IST).hour
+        if hour >= 18 or hour < Cfg.DAY_START_HOUR:
+            return
+
         sn = t.get("inverter_sn", "?")
         alerts: List[Dict] = []
 
@@ -631,6 +637,11 @@ class AlertEval:
             )
 
         for a in alerts:
+            dedup_key = f"alert:seen:{sn}:{a['type']}"
+            last = await self.rd.get(dedup_key)
+            if last is not None:
+                continue
+            await self.rd.set(dedup_key, "1", ex=self.DEDUP_WINDOW_S)
             try:
                 async with self.pool.acquire() as c:
                     await c.execute(
@@ -1185,6 +1196,9 @@ class Collector:
             log.warning("Cycle backfill: %s", e)
 
     async def _check_offline(self):
+        hour = datetime.now(IST).hour
+        if hour >= 18 or hour < Cfg.DAY_START_HOUR:
+            return
         try:
             async with self.db.acquire() as c:
                 rows = await c.fetch(
@@ -1194,6 +1208,11 @@ class Collector:
                     str(Cfg.ALERT_OFFLINE_S),
                 )
                 for r in rows:
+                    dedup_key = f"alert:seen:{r['serial_number']}:inverter_offline"
+                    last = await self.rd.get(dedup_key)
+                    if last is not None:
+                        continue
+                    await self.rd.set(dedup_key, "1", ex=AlertEval.DEDUP_WINDOW_S)
                     msg = (
                         f"Inverter {r['serial_number']} offline >{Cfg.ALERT_OFFLINE_S}s"
                     )
