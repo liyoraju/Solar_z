@@ -1115,17 +1115,8 @@ async def get_cycle_status():
                         COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
                         COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
                         COUNT(*) AS days
-                    FROM (
-                        SELECT daily_production_kwh, daily_savings,
-                               total_grid_export_wh, total_grid_import_wh, total_load_wh
-                        FROM telemetry_daily
-                        WHERE day >= $1 AND day < CURRENT_DATE
-                        UNION ALL
-                        SELECT daily_production_kwh, daily_savings,
-                               total_grid_export_wh, total_grid_import_wh, total_load_wh
-                        FROM telemetry_daily_gaps
-                        WHERE day >= $1 AND day < CURRENT_DATE
-                    ) AS combined
+                    FROM telemetry_daily
+                    WHERE day >= $1 AND day < CURRENT_DATE
                     """,
                     current_row,
                 )
@@ -1336,17 +1327,8 @@ async def analytics_billing_cycles(months: int = Query(6, le=60)):
                             COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
                             COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
                             COUNT(*) AS days
-                        FROM (
-                            SELECT daily_production_kwh, daily_savings,
-                                   total_grid_export_wh, total_grid_import_wh, total_load_wh
-                            FROM telemetry_daily
-                            WHERE day >= $1 AND day < CURRENT_DATE
-                            UNION ALL
-                            SELECT daily_production_kwh, daily_savings,
-                                   total_grid_export_wh, total_grid_import_wh, total_load_wh
-                            FROM telemetry_daily_gaps
-                            WHERE day >= $1 AND day < CURRENT_DATE
-                        ) AS combined""",
+                        FROM telemetry_daily
+                        WHERE day >= $1 AND day < CURRENT_DATE""",
                         r["cycle_start"],
                     )
                     live = dict(live)
