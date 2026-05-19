@@ -42,6 +42,8 @@ export interface OverviewData {
   total_production: number;
   daily_savings: number;
   total_savings: number;
+  daily_gap_kwh: number;
+  total_gap_kwh: number;
   fault_active: boolean;
   uptime_samples: number;
   inverter_status?: number;
@@ -55,6 +57,7 @@ export interface FinancialData {
   total_savings: number;
   today_production_kwh: number;
   today_savings: number;
+  today_gap_kwh: number;
   feed_in_tariff: number;
   grid_import_tariff: number;
   currency: string;
@@ -100,7 +103,8 @@ export function useOverview() {
           status: 'online',
           pv_power: 2640, grid_power: 1200, load_power: 1800, battery_soc: 78,
           temperature: 42.5, daily_production: 26.4, total_production: 18450,
-          daily_savings: 92.4, total_savings: 64500, fault_active: false, uptime_samples: 1440,
+          daily_savings: 92.4, total_savings: 64500, daily_gap_kwh: 0, total_gap_kwh: 0,
+          fault_active: false, uptime_samples: 1440,
         });
       }
       setLoading(false);
@@ -127,6 +131,7 @@ export function useFinancial() {
         setData({
           total_production_kwh: 18450, total_export_kwh: 5200, total_import_kwh: 1800,
           total_savings: 64500, today_production_kwh: 26.4, today_savings: 92.4,
+          today_gap_kwh: 0,
           feed_in_tariff: 0, grid_import_tariff: 0, currency: 'INR', co2_avoided_tonnes: 7.75,
         });
       }
@@ -208,6 +213,7 @@ export interface BillingCycle {
   avg_daily_savings: number;
   day_count: number;
   is_current: boolean;
+  gap_kwh: number;
 }
 
 export function useBillingCycles(months: number = 6) {
@@ -245,25 +251,6 @@ export interface MonthlyStats {
   self_consumption_pct: number;
 }
 
-export function useMonthlyStats(months: number = 3) {
-  const [data, setData] = useState<MonthlyStats[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      const result = await fetchWithCache<MonthlyStats[]>(
-        `/api/analytics/monthly?months=${months}`, 'monthly_stats', []
-      );
-      setData(result);
-      setLoading(false);
-    };
-    fetchData();
-  }, [months]);
-
-  return { data, loading };
-}
-
 export function useHistory(days: number = 7) {
   const [data, setData] = useState<HistoryPoint[]>([]);
 
@@ -296,40 +283,6 @@ export function useHistory(days: number = 7) {
     };
     fetchData();
   }, [days]);
-
-  return data;
-}
-
-export function useHourlyHistory() {
-  const [data, setData] = useState<HistoryPoint[]>([]);
-
-  useEffect(() => {
-    const fetchData = async () => {
-      const result = await fetchWithCache<HistoryPoint[]>(
-        '/api/telemetry/history?interval=1+hour&limit=24', 'hourly_history', []
-      );
-      if (result.length > 0) {
-        setData(result.reverse());
-      } else {
-        const mock: HistoryPoint[] = Array.from({ length: 24 }, (_, i) => ({
-          time: `${String(i).padStart(2, '0')}:00`,
-          avg_pv_power: Math.max(0, Math.sin((i - 6) * Math.PI / 12) * 2500 + Math.random() * 500),
-          peak_pv_power: Math.max(0, Math.sin((i - 6) * Math.PI / 12) * 3000 + Math.random() * 800),
-          avg_inverter_power: Math.max(0, Math.sin((i - 6) * Math.PI / 12) * 2200 + Math.random() * 400),
-          peak_inverter_power: Math.max(0, Math.sin((i - 6) * Math.PI / 12) * 2800 + Math.random() * 600),
-          max_temperature: 30 + Math.random() * 15,
-          avg_frequency: 49.9 + Math.random() * 0.2,
-          daily_production_kwh: 1 + Math.random() * 3,
-          daily_savings: 3 + Math.random() * 8,
-          sample_count: 60,
-        }));
-        setData(mock);
-      }
-    };
-    fetchData();
-    const interval = setInterval(fetchData, 300000);
-    return () => clearInterval(interval);
-  }, []);
 
   return data;
 }
@@ -424,41 +377,4 @@ export function useCycleStatus() {
   return { data, loading };
 }
 
-export interface BillingReport {
-  id: number;
-  cycle_start: string;
-  cycle_end: string;
-  total_production_kwh: number;
-  total_savings: number;
-  total_grid_export_kwh: number;
-  total_grid_import_kwh: number;
-  total_load_kwh: number;
-  avg_daily_production: number;
-  avg_daily_savings: number;
-  day_count: number;
-  finalized_at: string;
-  notes: string;
-}
 
-export function useBillingReports(limit: number = 12) {
-  const [data, setData] = useState<BillingReport[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    const fetchData = async () => {
-      const result = await fetchWithCache<BillingReport[]>(
-        `/api/analytics/billing-reports?limit=${limit}`, 'billing_reports', []
-      );
-      if (!cancelled) {
-        setData(result);
-        setLoading(false);
-      }
-    };
-    fetchData();
-    const timer = setInterval(fetchData, 120000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [limit]);
-
-  return { data, loading };
-}

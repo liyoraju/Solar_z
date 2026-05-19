@@ -3,7 +3,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useFinancial, useOverview, useTariffConfig, useBillingCycles } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { formatNumber, formatCurrency } from '../utils/helpers';
-import { IndianRupee, TrendingUp, TrendingDown, Leaf, Zap, ArrowUpRight, ArrowDownRight, BarChart3, Calendar } from 'lucide-react';
+import { IndianRupee, TrendingUp, TrendingDown, Leaf, Zap, ArrowUpRight, ArrowDownRight, BarChart3, Calendar, AlertTriangle } from 'lucide-react';
 
 function cycleLabel(cycle: { cycle_start: string; cycle_end: string | null; is_current: boolean }): string {
   if (cycle.is_current) return 'This Cycle';
@@ -76,6 +76,12 @@ export const FinancialOverview: React.FC = () => {
           </div>
           <p className={`text-2xl font-bold ${themeColors.text}`}>{formatCurrency(todaySavings, currency)}</p>
           <p className={`text-xs ${themeColors.textSecondary} mt-1`}>{formatNumber(todayProd, 2)} kWh generated</p>
+          {(financial?.today_gap_kwh ?? 0) > 0 && (
+            <div className="flex items-center gap-1 mt-1.5 text-amber-600 dark:text-amber-400 text-[10px] font-medium">
+              <AlertTriangle className="w-3 h-3" />
+              <span>+{formatNumber(financial!.today_gap_kwh, 2)} kWh gap</span>
+            </div>
+          )}
         </div>
         <div className={`p-4 rounded-xl ${themeColors.bg} border ${themeColors.border}`}>
           <div className="flex items-center gap-2 mb-2">
@@ -108,6 +114,12 @@ export const FinancialOverview: React.FC = () => {
             <p className={`text-2xl font-bold ${themeColors.text}`}>{formatCurrency(cycleSavings, currency)}</p>
             <span className={`text-xs ${themeColors.textSecondary}`}>{formatNumber(cycleProd, 1)} kWh</span>
           </div>
+          {(currentCycle?.gap_kwh ?? 0) > 0 && (
+            <div className="flex items-center gap-1 mt-1.5 text-amber-600 dark:text-amber-400 text-[10px] font-medium">
+              <AlertTriangle className="w-3 h-3" />
+              <span>+{formatNumber(currentCycle!.gap_kwh, 2)} kWh gap this cycle</span>
+            </div>
+          )}
         </div>
       )}
 

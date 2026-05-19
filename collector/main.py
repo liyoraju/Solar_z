@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import signal
-import sys
 import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -75,19 +74,6 @@ class Cfg:
         return prev.replace(day=start_day, hour=0, minute=0, second=0, microsecond=0)
 
     @staticmethod
-    def effective_import_tariff(total_kwh):
-        raw = Cfg.TARIFF_NT if Cfg.TARIFF_MODE == "non_telescopic" else Cfg.TARIFF_SLABS
-        slabs = Cfg._parse_slabs(raw)
-        if not slabs:
-            return Cfg.GRID_IMPORT_TARIFF
-        prev = 0
-        for upper, rate in slabs:
-            if prev < total_kwh <= upper:
-                return rate
-            prev = upper
-        return slabs[-1][1]
-
-    @staticmethod
     async def load_tariff_from_redis(rd: aioredis.Redis) -> dict:
         mode = (await rd.get("cfg:tariff_mode")) or Cfg.TARIFF_MODE
         slabs_str = (await rd.get("cfg:tariff_slabs")) or Cfg.TARIFF_SLABS
@@ -122,6 +108,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("collector")
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 # ---------------------------------------------------------------------------
@@ -790,22 +777,30 @@ class Collector:
     async def _detect_gap(self, t: Dict, tariff_cfg: dict):
         curr_time = datetime.fromisoformat(t["time"]) if isinstance(t["time"], str) else t["time"]
         curr_total = t.get("total_production")
-        if curr_total is None:
+        curr_daily = t.get("daily_production")
+        if curr_total is None or curr_daily is None:
             return
         last_time_str = await self.rd.get("collector:gap_check:time")
         last_total_str = await self.rd.get("collector:gap_check:total")
-        if last_time_str is None or last_total_str is None:
-            await self.rd.set("collector:gap_check:time", curr_time.isoformat())
-            await self.rd.set("collector:gap_check:total", str(curr_total))
+        last_daily_str = await self.rd.get("collector:gap_check:daily")
+        if last_time_str is None or last_total_str is None or last_daily_str is None:
+            await self._save_gap_state(curr_time, curr_total, curr_daily)
             return
         last_time = datetime.fromisoformat(last_time_str)
         last_total = float(last_total_str)
-        gap_seconds = (curr_time - last_time).total_seconds()
-        if gap_seconds <= 60 or curr_total <= last_total:
-            await self.rd.set("collector:gap_check:time", curr_time.isoformat())
-            await self.rd.set("collector:gap_check:total", str(curr_total))
+        last_daily = float(last_daily_str)
+        lifetime_delta = curr_total - last_total
+        if lifetime_delta <= 0:
+            await self._save_gap_state(curr_time, curr_total, curr_daily)
             return
-        kwh_missed = curr_total - last_total
+        if curr_daily >= last_daily:
+            daily_delta = curr_daily - last_daily
+        else:
+            daily_delta = curr_daily
+        gap_kwh = lifetime_delta - daily_delta
+        if gap_kwh <= 0.001:
+            await self._save_gap_state(curr_time, curr_total, curr_daily)
+            return
         fit = tariff_cfg.get("feed_in_tariff", Cfg.FEED_IN_TARIFF)
         day_slices: list[tuple[datetime, float]] = []
         day_cursor = last_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -819,12 +814,12 @@ class Collector:
             day_cursor = day_end
         total_secs = sum(s for _, s in day_slices)
         if total_secs <= 0:
-            await self.rd.set("collector:gap_check:time", curr_time.isoformat())
-            await self.rd.set("collector:gap_check:total", str(curr_total))
+            await self._save_gap_state(curr_time, curr_total, curr_daily)
             return
+        gap_seconds = (curr_time - last_time).total_seconds()
         async with self.db.acquire() as c:
             for day_dt, secs in day_slices:
-                day_kwh = kwh_missed * (secs / total_secs)
+                day_kwh = gap_kwh * (secs / total_secs)
                 day_savings = day_kwh * fit
                 await c.execute(
                     """INSERT INTO telemetry_daily_gaps
@@ -849,16 +844,34 @@ class Collector:
                 curr_time,
                 last_total,
                 curr_total,
-                round(kwh_missed, 4),
+                round(gap_kwh, 4),
                 len(day_slices),
             )
+            await c.execute(
+                """INSERT INTO telemetry_gap_alerts
+                       (inverter_sn, gap_start, gap_end, kwh_missed,
+                        total_before, total_after, daily_before, daily_after)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                t["inverter_sn"],
+                last_time,
+                curr_time,
+                round(gap_kwh, 4),
+                round(last_total, 4),
+                round(curr_total, 4),
+                round(last_daily, 4),
+                round(curr_daily, 4),
+            )
         log.info(
-            "Gap filled: %.1fs %.2f kWh across %d days (%s \u2192 %s)",
-            gap_seconds, kwh_missed, len(day_slices),
+            "Gap detected: %.1fs %.2f kWh (lifetime=%.2f daily=%.2f) across %d days (%s \u2192 %s)",
+            gap_seconds, gap_kwh, lifetime_delta, daily_delta, len(day_slices),
             last_time.strftime("%m/%d %H:%M"), curr_time.strftime("%m/%d %H:%M"),
         )
+        await self._save_gap_state(curr_time, curr_total, curr_daily)
+
+    async def _save_gap_state(self, curr_time: datetime, curr_total: float, curr_daily: float):
         await self.rd.set("collector:gap_check:time", curr_time.isoformat())
         await self.rd.set("collector:gap_check:total", str(curr_total))
+        await self.rd.set("collector:gap_check:daily", str(curr_daily))
 
     async def _init_billing(self):
         if not await self.rd.exists("consumption:billing:snapshot"):
@@ -1001,9 +1014,34 @@ class Collector:
             log.error("check cycle rollover: %s", e)
 
     async def tick(self):
-        hour = datetime.now(timezone.utc).hour
+        hour = datetime.now(IST).hour
         if hour < Cfg.DAY_START_HOUR or hour >= Cfg.DAY_END_HOUR:
-            await self.rd.set("collector:last_collection", datetime.now(timezone.utc).isoformat())
+            await self.rd.set("collector:last_collection", datetime.now(IST).isoformat())
+            cached = await self.rd.get(f"telemetry:latest:{Cfg.INVERTER_SN}")
+            if cached:
+                prev = json.loads(cached)
+                last_total = prev.get("total_production", 0)
+                last_total_savings = prev.get("total_savings", 0)
+            else:
+                last_total = 0
+                last_total_savings = 0
+            zero = {
+                "time": datetime.now(IST).isoformat(),
+                "inverter_sn": Cfg.INVERTER_SN or "unknown",
+                "pv1_power": 0, "pv2_power": 0,
+                "grid_export_power": 0, "grid_import_power": 0,
+                "load_power": 0,
+                "battery_power": 0, "battery_soc": None,
+                "inverter_power": 0, "inverter_temperature": None,
+                "daily_production": 0, "total_production": last_total,
+                "daily_savings": 0, "total_savings": last_total_savings,
+                "daily_grid_export": 0, "total_grid_export": prev.get("total_grid_export", 0) if cached else 0,
+                "daily_grid_import": 0, "total_grid_import": prev.get("total_grid_import", 0) if cached else 0,
+                "daily_load_consumption": 0, "total_load_consumption": prev.get("total_load_consumption", 0) if cached else 0,
+                "working_mode": None, "inverter_status": None,
+            }
+            await self.rd.set(f"telemetry:latest:{Cfg.INVERTER_SN}", json.dumps(zero), ex=120)
+            await self.rd.publish(f"telemetry:realtime:{Cfg.INVERTER_SN}", json.dumps(zero))
             return
         await self._check_cycle_rollover()
         raw = await self.client.realtime()
@@ -1229,7 +1267,7 @@ class Collector:
                 await self._refresh_views()
                 last_refresh = now
 
-            hour = datetime.now(timezone.utc).hour
+            hour = datetime.now(IST).hour
             if Cfg.DAY_START_HOUR <= hour < Cfg.DAY_END_HOUR:
                 await asyncio.sleep(Cfg.INTERVAL)
             else:

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, TrendingUp, TrendingDown, Sun } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, Sun, AlertTriangle } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { useOverview, useHistory } from '../hooks/useApi';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -127,6 +127,14 @@ export const StatsCards: React.FC = () => {
         trendLabel="vs avg"
         bgColor={accentColors.bg}
       />
+      {(overview?.daily_gap_kwh ?? 0) > 0 && (
+        <div className="col-span-2 lg:col-span-4 -mt-2">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 text-xs font-medium">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            <span>{formatNumber(overview!.daily_gap_kwh, 2)} kWh gap detected today</span>
+          </div>
+        </div>
+      )}
       <StatCard
         title="Daily Savings"
         value={formatCurrency(dailySavings, 'INR')}
