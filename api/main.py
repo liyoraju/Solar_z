@@ -514,25 +514,18 @@ async def telemetry_daily(sn: Optional[str] = None, days: int = Query(30, le=365
     try:
         async with db_pool.acquire() as c:
             cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            sn_filter = " AND inverter_sn = $2" if sn else ""
+            params: list = [cutoff]
+            if sn:
+                params.append(sn)
             q = """SELECT day::text AS time,
                           COALESCE(avg_pv1_power,0) + COALESCE(avg_pv2_power,0) AS avg_pv_power,
                           COALESCE(peak_pv1_power,0) + COALESCE(peak_pv2_power,0) AS peak_pv_power,
                           avg_inverter_power, peak_inverter_power,
                           max_temperature, avg_frequency,
                           daily_production_kwh, daily_savings, sample_count
-                   FROM telemetry_daily WHERE day >= $1
-                   UNION ALL
-                   SELECT day::text AS time,
-                          0 AS avg_pv_power, 0 AS peak_pv_power,
-                          0 AS avg_inverter_power, 0 AS peak_inverter_power,
-                          NULL::float AS max_temperature, NULL::float AS avg_frequency,
-                          daily_production_kwh, daily_savings, sample_count
-                   FROM telemetry_daily_gaps WHERE day >= $1 """
-            params: list = [cutoff]
-            if sn:
-                q += " AND inverter_sn = $2"
-                params.append(sn)
-            q += " ORDER BY time DESC"
+                   FROM telemetry_daily WHERE day >= $1""" + sn_filter + """
+                   ORDER BY day DESC"""
             rows = await c.fetch(q, *params)
             return [dict(r) for r in rows]
     except Exception as e:
