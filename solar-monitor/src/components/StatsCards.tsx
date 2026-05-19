@@ -103,22 +103,6 @@ export const StatsCards: React.FC = () => {
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
       <StatCard
-        title="PV Power"
-        value={formatNumber(totalPv, 0)}
-        unit="W"
-        icon={<Sun className={`w-5 h-5 ${accentColors.primary}`} />}
-        trend={Math.round(pvTrend * 10) / 10}
-        trendLabel="vs avg"
-        bgColor={accentColors.bg}
-      />
-      <StatCard
-        title="Load Power"
-        value={formatNumber(loadPower, 0)}
-        unit="W"
-        icon={<Zap className={`w-5 h-5 ${accentColors.primary}`} />}
-        bgColor={accentColors.bg}
-      />
-      <StatCard
         title="Daily Production"
         value={formatNumber(dailyProd, 2)}
         unit="kWh"
@@ -135,6 +119,22 @@ export const StatsCards: React.FC = () => {
           </div>
         </div>
       )}
+      <StatCard
+        title="PV Power"
+        value={formatNumber(totalPv, 0)}
+        unit="W"
+        icon={<Sun className={`w-5 h-5 ${accentColors.primary}`} />}
+        trend={Math.round(pvTrend * 10) / 10}
+        trendLabel="vs avg"
+        bgColor={accentColors.bg}
+      />
+      <StatCard
+        title="Load Power"
+        value={formatNumber(loadPower, 0)}
+        unit="W"
+        icon={<Zap className={`w-5 h-5 ${accentColors.primary}`} />}
+        bgColor={accentColors.bg}
+      />
       <StatCard
         title="Daily Savings"
         value={formatCurrency(dailySavings, 'INR')}
