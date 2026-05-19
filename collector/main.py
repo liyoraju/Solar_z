@@ -1017,14 +1017,6 @@ class Collector:
         hour = datetime.now(IST).hour
         if hour < Cfg.DAY_START_HOUR or hour >= Cfg.DAY_END_HOUR:
             await self.rd.set("collector:last_collection", datetime.now(IST).isoformat())
-            cached = await self.rd.get(f"telemetry:latest:{Cfg.INVERTER_SN}")
-            if cached:
-                prev = json.loads(cached)
-                last_total = prev.get("total_production", 0)
-                last_total_savings = prev.get("total_savings", 0)
-            else:
-                last_total = 0
-                last_total_savings = 0
             zero = {
                 "time": datetime.now(IST).isoformat(),
                 "inverter_sn": Cfg.INVERTER_SN or "unknown",
@@ -1033,11 +1025,6 @@ class Collector:
                 "load_power": 0,
                 "battery_power": 0, "battery_soc": None,
                 "inverter_power": 0, "inverter_temperature": None,
-                "daily_production": prev.get("daily_production", 0), "total_production": last_total,
-                "daily_savings": prev.get("daily_savings", 0), "total_savings": last_total_savings,
-                "daily_grid_export": 0, "total_grid_export": prev.get("total_grid_export", 0) if cached else 0,
-                "daily_grid_import": 0, "total_grid_import": prev.get("total_grid_import", 0) if cached else 0,
-                "daily_load_consumption": 0, "total_load_consumption": prev.get("total_load_consumption", 0) if cached else 0,
                 "working_mode": None, "inverter_status": None,
             }
             await self.rd.set(f"telemetry:latest:{Cfg.INVERTER_SN}", json.dumps(zero), ex=120)
