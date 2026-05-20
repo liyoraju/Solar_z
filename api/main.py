@@ -794,16 +794,6 @@ async def analytics_overview():
                     inverter_sn=inv["serial_number"] if inv else None,
                     status=inv["status"] if inv else "no_data",
                 )
-            today_gap = await c.fetchval(
-                """SELECT COALESCE(SUM(kwh_missed), 0)
-                   FROM telemetry_gap_alerts
-                   WHERE gap_start >= CURRENT_DATE AND status = 'active'"""
-            ) or 0
-            total_gap = await c.fetchval(
-                """SELECT COALESCE(SUM(kwh_missed), 0)
-                   FROM telemetry_gap_alerts
-                   WHERE status = 'active'"""
-            ) or 0
             pv = (latest["pv1_power"] or 0) + (latest["pv2_power"] or 0)
             gexp = latest["grid_export_power"] or 0
             gimp = latest["grid_import_power"] or 0
@@ -819,8 +809,8 @@ async def analytics_overview():
                 total_production=round(latest["total_production"] or 0, 2),
                 daily_savings=round(latest["daily_savings"] or 0, 4),
                 total_savings=round(latest["total_savings"] or 0, 2),
-                daily_gap_kwh=round(float(today_gap), 2),
-                total_gap_kwh=round(float(total_gap), 2),
+                daily_gap_kwh=0,
+                total_gap_kwh=0,
                 fault_active=bool(
                     latest["fault_code"] and int(latest["fault_code"]) != 0
                 ),
@@ -847,11 +837,6 @@ async def analytics_financial():
             """)
             if not row:
                 return {}
-            today_gap = await c.fetchval(
-                """SELECT COALESCE(SUM(kwh_missed), 0)
-                   FROM telemetry_gap_alerts
-                   WHERE gap_start >= CURRENT_DATE AND status = 'active'"""
-            ) or 0
             tariff_feed = float(
                 (await redis.get("cfg:feed_in_tariff")) or settings.feed_in_tariff
             )
@@ -867,7 +852,7 @@ async def analytics_financial():
                 "total_savings": round(row["total_savings"] or 0, 2),
                 "today_production_kwh": round(row["today_kwh"] or 0, 2),
                 "today_savings": round(row["today_savings"] or 0, 4),
-                "today_gap_kwh": round(float(today_gap), 2),
+                "today_gap_kwh": 0,
                 "feed_in_tariff": tariff_feed,
                 "grid_import_tariff": tariff_import,
                 "currency": currency,
@@ -1228,39 +1213,6 @@ class CycleStatus(BaseModel):
     current_cycle: BillingCycle | None
 
 
-class GapRecord(BaseModel):
-    id: int
-    gap_start: str
-    gap_end: str
-    kwh_total_before: Optional[float] = None
-    kwh_total_after: Optional[float] = None
-    kwh_missed: float
-    day_count: int = 0
-    filled: bool = False
-    created_at: str
-
-
-class GapAlert(BaseModel):
-    id: int
-    inverter_sn: str
-    gap_start: str
-    gap_end: str
-    kwh_missed: float
-    total_before: Optional[float] = None
-    total_after: Optional[float] = None
-    daily_before: Optional[float] = None
-    daily_after: Optional[float] = None
-    status: str = "active"
-    created_at: str
-
-
-class ReconcileResult(BaseModel):
-    gaps_found: int
-    gaps_filled: int
-    days_filled: int
-    total_kwh_recovered: float = 0
-
-
 @app.get("/api/analytics/billing-cycle/status", response_model=CycleStatus)
 async def get_cycle_status():
     try:
@@ -1313,12 +1265,6 @@ async def get_cycle_status():
                     row["sav"] = round(row["exp"] * fit + self_use * import_rate, 2)
                 if row and row["days"] > 0:
                     days = row["days"]
-                    cycle_gap = await c.fetchval(
-                        """SELECT COALESCE(SUM(kwh_missed), 0)
-                           FROM telemetry_gap_alerts
-                           WHERE gap_start >= $1 AND status = 'active'""",
-                        current_row,
-                    ) or 0
                     current_cycle = BillingCycle(
                         cycle_start=current_row.isoformat(),
                         cycle_end=None,
@@ -1331,7 +1277,7 @@ async def get_cycle_status():
                         avg_daily_savings=round(row["sav"] / days, 2),
                         day_count=days,
                         is_current=True,
-                        gap_kwh=round(float(cycle_gap), 2),
+                        gap_kwh=0,
                     )
         if not end_date_str:
             return CycleStatus(
@@ -1534,12 +1480,6 @@ async def analytics_billing_cycles(months: int = Query(6, le=60)):
                     self_use = live["prod"] - live["exp"]
                     live["sav"] = round(live["exp"] * fit + self_use * import_rate, 2)
                     days = live["days"]
-                    cycle_gap = await c.fetchval(
-                        """SELECT COALESCE(SUM(kwh_missed), 0)
-                           FROM telemetry_gap_alerts
-                           WHERE gap_start >= $1 AND status = 'active'""",
-                        r["cycle_start"],
-                    ) or 0
                     if days > 0:
                         result.append(BillingCycle(
                             cycle_start=r["cycle_start"].isoformat(),
@@ -1553,14 +1493,14 @@ async def analytics_billing_cycles(months: int = Query(6, le=60)):
                             avg_daily_savings=round(live["sav"] / days, 2),
                             day_count=days,
                             is_current=True,
-                            gap_kwh=round(float(cycle_gap), 2),
+                            gap_kwh=0,
                         ))
                     else:
                         result.append(BillingCycle(
                             cycle_start=r["cycle_start"].isoformat(),
                             cycle_end=None,
                             is_current=True,
-                            gap_kwh=round(float(cycle_gap), 2),
+                            gap_kwh=0,
                         ))
                 else:
                     result.append(BillingCycle(
@@ -1680,192 +1620,6 @@ async def backfill_billing_reports():
                     )
                     updated += 1
             return {"updated": updated}
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-# ---------------------------------------------------------------------------
-# Gap Reconciliation — detect & backfill missing telemetry intervals
-# ---------------------------------------------------------------------------
-@app.post("/api/analytics/reconcile", response_model=ReconcileResult)
-async def reconcile_telemetry_gaps():
-    try:
-        async with db_pool.acquire() as c:
-            rows = await c.fetch(
-                """SELECT time, total_production, daily_production, inverter_sn
-                   FROM telemetry
-                   WHERE total_production IS NOT NULL
-                   ORDER BY time ASC"""
-            )
-        gaps_found = 0
-        gaps_filled = 0
-        days_filled_set: set = set()
-        total_kwh = 0.0
-
-        fit = float(await redis.get("cfg:feed_in_tariff") or "3.50")
-        git = float(await redis.get("cfg:grid_import_tariff") or "6.00")
-
-        for i in range(1, len(rows)):
-            prev = rows[i - 1]
-            curr = rows[i]
-            pv_total = prev["total_production"]
-            cv_total = curr["total_production"]
-            pv_daily = prev.get("daily_production")
-            cv_daily = curr.get("daily_production")
-            if pv_total is None or cv_total is None or cv_total <= pv_total:
-                continue
-
-            lifetime_delta = cv_total - pv_total
-            if pv_daily is not None and cv_daily is not None:
-                if cv_daily >= pv_daily:
-                    daily_delta = cv_daily - pv_daily
-                else:
-                    daily_delta = cv_daily
-            else:
-                daily_delta = 0
-
-            gap_kwh = lifetime_delta - daily_delta
-            if gap_kwh <= 0.001:
-                continue
-
-            gap_start = prev["time"]
-            gap_end = curr["time"]
-            total_kwh += gap_kwh
-            gaps_found += 1
-
-            day_cursor = gap_start.replace(hour=0, minute=0, second=0, microsecond=0)
-            day_slices: list[tuple[datetime, float]] = []
-            while day_cursor < gap_end:
-                day_end = day_cursor + timedelta(days=1)
-                overlap_start = max(gap_start, day_cursor)
-                overlap_end = min(gap_end, day_end)
-                secs = (overlap_end - overlap_start).total_seconds()
-                if secs > 0:
-                    day_slices.append((day_cursor, secs))
-                day_cursor = day_end
-
-            total_secs = sum(s for _, s in day_slices)
-            if total_secs <= 0:
-                continue
-
-            async with db_pool.acquire() as c:
-                for day_dt, secs in day_slices:
-                    day_kwh = gap_kwh * (secs / total_secs)
-                    day_savings = day_kwh * git
-                    await c.execute(
-                        """INSERT INTO telemetry_daily_gaps
-                               (day, inverter_sn, daily_production_kwh, daily_savings, sample_count)
-                           VALUES ($1, $2, $3, $4, $5)
-                           ON CONFLICT (day, inverter_sn) DO UPDATE SET
-                               daily_production_kwh = EXCLUDED.daily_production_kwh,
-                               daily_savings = EXCLUDED.daily_savings,
-                               sample_count = EXCLUDED.sample_count""",
-                        day_dt.date(),
-                        prev["inverter_sn"],
-                        round(day_kwh, 4),
-                        round(day_savings, 4),
-                        1,
-                    )
-                    days_filled_set.add(day_dt.date())
-
-                await c.execute(
-                    """INSERT INTO telemetry_gaps_audit
-                           (gap_start, gap_end, kwh_total_before, kwh_total_after,
-                            kwh_missed, day_count, filled)
-                       VALUES ($1, $2, $3, $4, $5, $6, TRUE)""",
-                    gap_start,
-                    gap_end,
-                    pv_total,
-                    cv_total,
-                    round(gap_kwh, 4),
-                    len(day_slices),
-                )
-                await c.execute(
-                    """INSERT INTO telemetry_gap_alerts
-                           (inverter_sn, gap_start, gap_end, kwh_missed,
-                            total_before, total_after, daily_before, daily_after)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
-                    prev["inverter_sn"],
-                    gap_start,
-                    gap_end,
-                    round(gap_kwh, 4),
-                    round(pv_total, 4),
-                    round(cv_total, 4),
-                    round(pv_daily, 4) if pv_daily else 0,
-                    round(cv_daily, 4) if cv_daily else 0,
-                )
-            gaps_filled += 1
-
-        return ReconcileResult(
-            gaps_found=gaps_found,
-            gaps_filled=gaps_filled,
-            days_filled=len(days_filled_set),
-            total_kwh_recovered=round(total_kwh, 2),
-        )
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@app.get("/api/analytics/gap-report", response_model=List[GapRecord])
-async def gap_report(limit: int = Query(50, le=500)):
-    try:
-        async with db_pool.acquire() as c:
-            rows = await c.fetch(
-                """SELECT id, gap_start, gap_end,
-                          kwh_total_before, kwh_total_after,
-                          kwh_missed, day_count, filled, created_at
-                   FROM telemetry_gaps_audit
-                   ORDER BY created_at DESC
-                   LIMIT $1""",
-                limit,
-            )
-            return [
-                GapRecord(
-                    id=r["id"],
-                    gap_start=r["gap_start"].isoformat(),
-                    gap_end=r["gap_end"].isoformat(),
-                    kwh_total_before=r["kwh_total_before"],
-                    kwh_total_after=r["kwh_total_after"],
-                    kwh_missed=r["kwh_missed"],
-                    day_count=r["day_count"],
-                    filled=r["filled"],
-                    created_at=r["created_at"].isoformat(),
-                )
-                for r in rows
-            ]
-    except Exception as e:
-        raise HTTPException(500, str(e))
-
-
-@app.get("/api/analytics/gap-alerts", response_model=List[GapAlert])
-async def gap_alerts(limit: int = Query(50, le=500)):
-    try:
-        async with db_pool.acquire() as c:
-            rows = await c.fetch(
-                """SELECT id, inverter_sn, gap_start, gap_end,
-                          kwh_missed, total_before, total_after,
-                          daily_before, daily_after, status, created_at
-                   FROM telemetry_gap_alerts
-                   ORDER BY created_at DESC
-                   LIMIT $1""",
-                limit,
-            )
-            return [
-                GapAlert(
-                    id=r["id"],
-                    inverter_sn=r["inverter_sn"],
-                    gap_start=r["gap_start"].isoformat(),
-                    gap_end=r["gap_end"].isoformat(),
-                    kwh_missed=r["kwh_missed"],
-                    total_before=r["total_before"],
-                    total_after=r["total_after"],
-                    daily_before=r["daily_before"],
-                    daily_after=r["daily_after"],
-                    status=r["status"],
-                    created_at=r["created_at"].isoformat(),
-                )
-                for r in rows
-            ]
     except Exception as e:
         raise HTTPException(500, str(e))
 
