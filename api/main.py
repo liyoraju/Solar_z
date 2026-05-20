@@ -1154,6 +1154,12 @@ async def get_cycle_status():
                     row["sav"] = round(row["exp"] * fit + self_use * import_rate, 2)
                 if row and row["days"] > 0:
                     days = row["days"]
+                    cycle_gap = await c.fetchval(
+                        """SELECT COALESCE(SUM(kwh_missed), 0)
+                           FROM telemetry_gap_alerts
+                           WHERE gap_start >= $1 AND status = 'active'""",
+                        current_row,
+                    ) or 0
                     current_cycle = BillingCycle(
                         cycle_start=current_row.isoformat(),
                         cycle_end=None,
@@ -1166,6 +1172,7 @@ async def get_cycle_status():
                         avg_daily_savings=round(row["sav"] / days, 2),
                         day_count=days,
                         is_current=True,
+                        gap_kwh=round(float(cycle_gap), 2),
                     )
         if not end_date_str:
             return CycleStatus(

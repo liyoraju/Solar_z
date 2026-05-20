@@ -795,6 +795,73 @@ class Collector:
         last_total_str = await self.rd.get("collector:gap_check:total")
         last_daily_str = await self.rd.get("collector:gap_check:daily")
         if last_time_str is None or last_total_str is None or last_daily_str is None:
+            # Redis state missing (startup after sleep) — check database for last record
+            async with self.db.acquire() as c:
+                db_record = await c.fetchrow(
+                    """SELECT time, total_production, daily_production
+                       FROM telemetry
+                       WHERE total_production IS NOT NULL
+                         AND time < $1
+                       ORDER BY time DESC LIMIT 1""",
+                    curr_time - timedelta(seconds=30),
+                )
+            if db_record:
+                db_total = _float(db_record["total_production"])
+                db_daily = _float(db_record["daily_production"] or 0)
+                db_time = db_record["time"]
+                lifetime_delta = curr_total - db_total
+                if lifetime_delta > 0:
+                    daily_delta = curr_daily if db_daily == 0 else curr_daily - db_daily
+                    gap_kwh = lifetime_delta - daily_delta
+                    if gap_kwh > 0.001:
+                        log.info("Startup gap detected: %.3f kWh (db=%.2f → curr=%.2f)", gap_kwh, db_total, curr_total)
+                        fit = tariff_cfg.get("feed_in_tariff", Cfg.FEED_IN_TARIFF)
+                        last_time = db_time
+                        day_slices: list[tuple[datetime, float]] = []
+                        day_cursor = last_time.replace(hour=0, minute=0, second=0, microsecond=0)
+                        while day_cursor < curr_time:
+                            day_end = day_cursor + timedelta(days=1)
+                            overlap_start = max(last_time, day_cursor)
+                            overlap_end = min(curr_time, day_end)
+                            secs = (overlap_end - overlap_start).total_seconds()
+                            if secs > 0:
+                                day_slices.append((day_cursor, secs))
+                            day_cursor = day_end
+                        total_secs = sum(s for _, s in day_slices)
+                        if total_secs > 0:
+                            async with self.db.acquire() as c:
+                                await c.execute(
+                                    """INSERT INTO telemetry_gap_alerts
+                                           (inverter_sn, gap_start, gap_end, kwh_missed,
+                                            total_before, total_after, daily_before, daily_after)
+                                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                       ON CONFLICT (gap_start, gap_end, inverter_sn) DO NOTHING""",
+                                    t["inverter_sn"], last_time, curr_time, round(gap_kwh, 4),
+                                    round(db_total, 4), round(curr_total, 4),
+                                    round(db_daily, 4), round(curr_daily, 4),
+                                )
+                                for day_dt, secs in day_slices:
+                                    day_kwh = gap_kwh * (secs / total_secs)
+                                    day_savings = day_kwh * fit
+                                    await c.execute(
+                                        """INSERT INTO telemetry_daily_gaps
+                                               (day, inverter_sn, daily_production_kwh, daily_savings, sample_count)
+                                           VALUES ($1, $2, $3, $4, $5)
+                                           ON CONFLICT (day, inverter_sn) DO UPDATE SET
+                                               daily_production_kwh = telemetry_daily_gaps.daily_production_kwh + EXCLUDED.daily_production_kwh,
+                                               daily_savings = telemetry_daily_gaps.daily_savings + EXCLUDED.daily_savings,
+                                               sample_count = telemetry_daily_gaps.sample_count + EXCLUDED.sample_count""",
+                                        day_dt.date(), t["inverter_sn"], round(day_kwh, 4), round(day_savings, 4), 1,
+                                    )
+                                await c.execute(
+                                    """INSERT INTO telemetry_gaps_audit
+                                           (gap_start, gap_end, kwh_total_before, kwh_total_after,
+                                            kwh_missed, day_count, filled)
+                                       VALUES ($1, $2, $3, $4, $5, $6, TRUE)""",
+                                    last_time, curr_time, db_total, curr_total,
+                                    round(gap_kwh, 4), len(day_slices),
+                                )
+                            log.info("Startup gap recorded: %.3f kWh across %d days", gap_kwh, len(day_slices))
             await self._save_gap_state(curr_time, curr_total, curr_daily)
             return
         last_time = datetime.fromisoformat(last_time_str)
@@ -862,7 +929,8 @@ class Collector:
                 """INSERT INTO telemetry_gap_alerts
                        (inverter_sn, gap_start, gap_end, kwh_missed,
                         total_before, total_after, daily_before, daily_after)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   ON CONFLICT (gap_start, gap_end, inverter_sn) DO NOTHING""",
                 t["inverter_sn"],
                 last_time,
                 curr_time,
