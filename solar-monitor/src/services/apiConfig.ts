@@ -16,12 +16,20 @@ export function setApiBaseUrl(url: string): void {
 
 export function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   const base = getApiBaseUrl();
-  return fetch(`${base}${path}`, options);
+  const token = localStorage.getItem('solar:auth_token');
+  const headers: Record<string, string> = {
+    ...(options?.headers as Record<string, string> || {}),
+  };
+  if (token && !path.startsWith('/api/auth/')) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return fetch(`${base}${path}`, { ...options, headers });
 }
 
 export function apiWsUrl(): string {
   const base = getApiBaseUrl();
   const protocol = base.startsWith('https') ? 'wss' : 'ws';
   const host = base.replace(/^https?:\/\//, '');
-  return `${protocol}://${host}/api/ws/telemetry`;
+  const token = localStorage.getItem('solar:auth_token');
+  return `${protocol}://${host}/api/ws/telemetry${token ? `?token=${token}` : ''}`;
 }

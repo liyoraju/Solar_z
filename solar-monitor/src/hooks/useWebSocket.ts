@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { save as cacheSave, load as cacheLoad } from '../services/offlineStorage';
 import { idbSave, idbLoad } from '../services/offlineDB';
-import { getApiBaseUrl, apiFetch } from '../services/apiConfig';
+import { getApiBaseUrl, apiFetch, apiWsUrl } from '../services/apiConfig';
 
 export interface TelemetryData {
   time: string;
@@ -58,7 +58,7 @@ export function useWebSocket() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
   const connect = useCallback(() => {
-    const wsUrl = `${getApiBaseUrl().replace(/^http/, 'ws')}/api/ws/telemetry`;
+    const wsUrl = apiWsUrl();
 
     try {
       const ws = new WebSocket(wsUrl);

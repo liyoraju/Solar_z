@@ -8,17 +8,20 @@ import { TelemetryGrid } from './components/TelemetryGrid';
 import { ChartsSection } from './components/ChartsSection';
 import { SolarHouseVisualization } from './components/SolarHouseVisualization';
 import { FinancialOverview } from './components/FinancialOverview';
-import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, AlertCircle, WifiOff } from 'lucide-react';
+import { LoginPage } from './components/LoginPage';
+import { LayoutDashboard, Activity, Settings, FileText, Sun, Moon, Sunrise, Sunset, Check, Palette, IndianRupee, Plus, Trash2, Save, Loader2, Zap, AlertCircle, WifiOff, LogOut, User } from 'lucide-react';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { usePushNotifications } from './hooks/usePushNotifications';
 import { idbSave } from './services/offlineDB';
 import { getApiBaseUrl, setApiBaseUrl, apiFetch } from './services/apiConfig';
 import { App as CapacitorApp } from '@capacitor/app';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
 type Tab = 'dashboard' | 'telemetry' | 'reports' | 'settings';
 
 const Navigation: React.FC<{ activeTab: Tab; onTabChange: (tab: Tab) => void }> = ({ activeTab, onTabChange }) => {
   const { themeColors } = useTheme();
+  const { user, logout } = useAuth();
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
@@ -31,7 +34,7 @@ const Navigation: React.FC<{ activeTab: Tab; onTabChange: (tab: Tab) => void }> 
     <>
       {/* Desktop sidebar */}
       <nav className={`hidden lg:flex flex-col w-64 h-screen fixed left-0 top-0 ${themeColors.glass} border-r ${themeColors.border} z-40 pt-20 pb-6 px-4`}>
-        <div className="space-y-1">
+        <div className="space-y-1 flex-1">
           {tabs.map((tab) => (
             <button
               key={tab.key}
@@ -47,6 +50,22 @@ const Navigation: React.FC<{ activeTab: Tab; onTabChange: (tab: Tab) => void }> 
             </button>
           ))}
         </div>
+        {/* User info + logout */}
+        {user && (
+          <div className={`mt-auto pt-4 border-t ${themeColors.border}`}>
+            <div className="flex items-center gap-2 px-3 py-2 mb-2">
+              <User className={`w-4 h-4 ${themeColors.textSecondary}`} />
+              <span className={`text-xs ${themeColors.textSecondary} truncate`}>{user.email}</span>
+            </div>
+            <button
+              onClick={logout}
+              className={`w-full flex items-center gap-3 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-300 ${themeColors.textSecondary} hover:bg-red-500/10 hover:text-red-400`}
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+          </div>
+        )}
       </nav>
 
       {/* Mobile bottom nav */}
@@ -776,7 +795,7 @@ const PREFETCH_HOURLY_LIMIT = 168;
 
 async function prefetchAndCache(url: string, store: string, key: string) {
   try {
-    const res = await fetch(`${getApiBaseUrl()}${url}`);
+    const res = await apiFetch(url);
     if (res.ok) {
       const json = await res.json();
       await idbSave(store, key, json);
@@ -806,6 +825,7 @@ const useOfflinePrefetch = () => {
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const { themeColors, timeOfDay } = useTheme();
+  const { user, token, logout, loading } = useAuth();
   const activeTabRef = useRef(activeTab);
   useOfflinePrefetch();
   usePushNotifications();
@@ -824,6 +844,18 @@ const AppContent: React.FC = () => {
     });
     return () => { handler.then(h => h.remove()); };
   }, []);
+
+  if (loading) {
+    return (
+      <div className={`h-screen flex items-center justify-center ${themeColors.bg}`}>
+        <Loader2 className={`w-8 h-8 animate-spin ${themeColors.textSecondary}`} />
+      </div>
+    );
+  }
+
+  if (!token || !user) {
+    return <LoginPage />;
+  }
 
   return (
     <div className={`h-screen overflow-y-auto overflow-x-hidden ${themeColors.bg} transition-colors duration-[2000ms]`} style={{ scrollbarGutter: 'stable' }}>
@@ -860,7 +892,9 @@ const AppContent: React.FC = () => {
 function App() {
   return (
     <ThemeProvider>
-      <AppContent />
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </ThemeProvider>
   );
 }

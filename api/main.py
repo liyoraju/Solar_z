@@ -6,10 +6,15 @@ alert management, configuration UI, and analytics for the Deye SUN-3K-G03.
 """
 
 import asyncio
+import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
+import secrets
+import struct
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional
@@ -17,7 +22,7 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 import asyncpg
 import redis.asyncio as aioredis
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -218,6 +223,65 @@ class AckResponse(BaseModel):
     success: bool
 
 
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    inverter_sn: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user: Dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Simple JWT-like token (HMAC-based, no external deps)
+# ---------------------------------------------------------------------------
+def _make_token(user_id: int, email: str, secret: str) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()).rstrip(b'=').decode()
+    now = int(time.time())
+    payload = base64.urlsafe_b64encode(json.dumps({"sub": str(user_id), "email": email, "iat": now, "exp": now + 86400 * 30}).encode()).rstrip(b'=').decode()
+    signature = base64.urlsafe_b64encode(hmac.new(secret.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest()).rstrip(b'=').decode()
+    return f"{header}.{payload}.{signature}"
+
+
+def _verify_token(token: str, secret: str) -> Optional[Dict[str, Any]]:
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            return None
+        header, payload, signature = parts
+        expected_sig = base64.urlsafe_b64encode(hmac.new(secret.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest()).rstrip(b'=').decode()
+        if not hmac.compare_digest(signature, expected_sig):
+            return None
+        payload_bytes = base64.urlsafe_b64decode(payload + '==')
+        data = json.loads(payload_bytes)
+        if data.get("exp", 0) < time.time():
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    h = hashlib.sha256(f"{salt}{password}".encode()).hexdigest()
+    return f"{salt}${h}"
+
+
+def _verify_password(password: str, stored: str) -> bool:
+    try:
+        salt, h = stored.split('$', 1)
+        return hashlib.sha256(f"{salt}{password}".encode()).hexdigest() == h
+    except ValueError:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # WebSocket manager
 # ---------------------------------------------------------------------------
@@ -396,6 +460,25 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in ("/api/health", "/api/auth/register", "/api/auth/login") or \
+       not path.startswith("/api/") or \
+       path.startswith("/api/ws/") or \
+       request.method == "OPTIONS":
+        return await call_next(request)
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    token = auth_header[7:]
+    payload = _verify_token(token, settings.secret_key)
+    if not payload:
+        return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+    request.state.user = payload
+    return await call_next(request)
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -422,6 +505,82 @@ async def health():
         redis=rd_ok,
         uptime=(datetime.now(timezone.utc) - _start_time).total_seconds(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Authentication
+# ---------------------------------------------------------------------------
+@app.post("/api/auth/register", response_model=AuthResponse)
+async def auth_register(body: RegisterRequest):
+    if not body.email or not body.password:
+        raise HTTPException(400, "Email and password are required")
+    if len(body.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    try:
+        async with db_pool.acquire() as c:
+            existing = await c.fetchrow("SELECT id FROM users WHERE email = $1", body.email)
+            if existing:
+                raise HTTPException(400, "Email already registered")
+            pw_hash = _hash_password(body.password)
+            row = await c.fetchrow(
+                "INSERT INTO users (email, password_hash, inverter_sn) VALUES ($1, $2, $3) RETURNING id, email, inverter_sn",
+                body.email, pw_hash, body.inverter_sn,
+            )
+            token = _make_token(row["id"], row["email"], settings.secret_key)
+            return AuthResponse(
+                token=token,
+                user={"id": row["id"], "email": row["email"], "inverter_sn": row["inverter_sn"]},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+async def auth_login(body: LoginRequest):
+    if not body.email or not body.password:
+        raise HTTPException(400, "Email and password are required")
+    try:
+        async with db_pool.acquire() as c:
+            row = await c.fetchrow(
+                "SELECT id, email, password_hash, inverter_sn FROM users WHERE email = $1",
+                body.email,
+            )
+            if not row or not _verify_password(body.password, row["password_hash"]):
+                raise HTTPException(401, "Invalid email or password")
+            token = _make_token(row["id"], row["email"], settings.secret_key)
+            return AuthResponse(
+                token=token,
+                user={"id": row["id"], "email": row["email"], "inverter_sn": row["inverter_sn"]},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+async def get_current_user(request: Request) -> Dict[str, Any]:
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Authentication required")
+    token = auth_header[7:]
+    payload = _verify_token(token, settings.secret_key)
+    if not payload:
+        raise HTTPException(401, "Invalid or expired token")
+    try:
+        async with db_pool.acquire() as c:
+            row = await c.fetchrow(
+                "SELECT id, email, inverter_sn FROM users WHERE id = $1",
+                int(payload["sub"]),
+            )
+            if not row:
+                raise HTTPException(401, "User not found")
+            return {"id": row["id"], "email": row["email"], "inverter_sn": row["inverter_sn"]}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(401, "Authentication failed")
 
 
 # ---------------------------------------------------------------------------
@@ -1791,6 +1950,12 @@ async def unregister_push_token(req: PushTokenRequest):
 # ---------------------------------------------------------------------------
 @app.websocket("/api/ws/telemetry")
 async def ws_telemetry(ws: WebSocket):
+    token = ws.query_params.get("token")
+    if token:
+        payload = _verify_token(token, settings.secret_key)
+        if not payload:
+            await ws.close(code=4001, reason="Invalid token")
+            return
     await ws_mgr.connect_telemetry(ws)
     try:
         while True:
@@ -1803,6 +1968,12 @@ async def ws_telemetry(ws: WebSocket):
 
 @app.websocket("/api/ws/alerts")
 async def ws_alerts(ws: WebSocket):
+    token = ws.query_params.get("token")
+    if token:
+        payload = _verify_token(token, settings.secret_key)
+        if not payload:
+            await ws.close(code=4001, reason="Invalid token")
+            return
     await ws_mgr.connect_alert(ws)
     try:
         while True:
