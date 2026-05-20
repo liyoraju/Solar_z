@@ -1116,6 +1116,7 @@ async def get_cycle_status():
                     """
                     SELECT
                         COALESCE(SUM(daily_production_kwh), 0) AS prod,
+                        COALESCE(SUM(daily_savings), 0) AS sav,
                         COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
                         COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
                         COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
