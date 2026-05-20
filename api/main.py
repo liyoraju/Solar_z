@@ -82,6 +82,12 @@ db_pool: Optional[asyncpg.Pool] = None
 redis: Optional[aioredis.Redis] = None
 
 
+async def _load_cycle_tariff() -> dict:
+    feed_in = float((await redis.get("cfg:feed_in_tariff")) or settings.feed_in_tariff)
+    active_rate = float(await redis.get("collector:tariff_rate") or "0")
+    return {"feed_in_tariff": feed_in, "active_rate": active_rate}
+
+
 # ---------------------------------------------------------------------------
 # Pydantic models
 # ---------------------------------------------------------------------------
@@ -1110,7 +1116,6 @@ async def get_cycle_status():
                     """
                     SELECT
                         COALESCE(SUM(daily_production_kwh), 0) AS prod,
-                        COALESCE(SUM(daily_savings), 0) AS sav,
                         COALESCE(SUM(total_grid_export_wh), 0) / 1000.0 AS exp,
                         COALESCE(SUM(total_grid_import_wh), 0) / 1000.0 AS imp,
                         COALESCE(SUM(total_load_wh), 0) / 1000.0 AS load,
@@ -1141,6 +1146,11 @@ async def get_cycle_status():
                         row["imp"] += (today_row["daily_grid_import"] or 0)
                         row["load"] += (today_row["daily_load_consumption"] or 0)
                         row["days"] += 1
+                    tariff_cfg = await _load_cycle_tariff()
+                    fit = tariff_cfg["feed_in_tariff"]
+                    import_rate = tariff_cfg["active_rate"]
+                    self_use = row["prod"] - row["exp"]
+                    row["sav"] = round(row["exp"] * fit + self_use * import_rate, 2)
                 if row and row["days"] > 0:
                     days = row["days"]
                     current_cycle = BillingCycle(
@@ -1351,6 +1361,11 @@ async def analytics_billing_cycles(months: int = Query(6, le=60)):
                         live["imp"] += (today_row["daily_grid_import"] or 0)
                         live["load"] += (today_row["daily_load_consumption"] or 0)
                         live["days"] += 1
+                    tariff_cfg = await _load_cycle_tariff()
+                    fit = tariff_cfg["feed_in_tariff"]
+                    import_rate = tariff_cfg["active_rate"]
+                    self_use = live["prod"] - live["exp"]
+                    live["sav"] = round(live["exp"] * fit + self_use * import_rate, 2)
                     days = live["days"]
                     cycle_gap = await c.fetchval(
                         """SELECT COALESCE(SUM(kwh_missed), 0)

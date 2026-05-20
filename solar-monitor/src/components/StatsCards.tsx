@@ -15,6 +15,7 @@ interface StatCardProps {
   bgColor: string;
   progress?: number;
   progressColor?: string;
+  gapInfo?: { kwh: number };
 }
 
 const StatCard: React.FC<StatCardProps> = ({
@@ -27,6 +28,7 @@ const StatCard: React.FC<StatCardProps> = ({
   bgColor,
   progress,
   progressColor,
+  gapInfo,
 }) => {
   const { themeColors } = useTheme();
 
@@ -49,6 +51,12 @@ const StatCard: React.FC<StatCardProps> = ({
         <span className={`text-2xl sm:text-3xl font-bold ${themeColors.text}`}>{value}</span>
         {unit && <span className={`text-sm ${themeColors.textSecondary}`}>{unit}</span>}
       </div>
+      {gapInfo && gapInfo.kwh > 0 && (
+        <div className="flex items-center gap-1 mt-1.5 text-amber-600 dark:text-amber-400 text-[10px] font-medium">
+          <AlertTriangle className="w-3 h-3" />
+          <span>+{formatNumber(gapInfo.kwh, 2)} kWh gap</span>
+        </div>
+      )}
       {progress !== undefined && (
         <div className="mt-3">
           <div className={`h-2 rounded-full ${themeColors.bg} overflow-hidden`}>
@@ -110,15 +118,8 @@ export const StatsCards: React.FC = () => {
         trend={Math.round(prodTrend * 10) / 10}
         trendLabel="vs avg"
         bgColor={accentColors.bg}
+        gapInfo={{ kwh: overview?.daily_gap_kwh ?? 0 }}
       />
-      {(overview?.daily_gap_kwh ?? 0) > 0 && (
-        <div className="col-span-2 lg:col-span-4 -mt-2">
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 text-xs font-medium">
-            <AlertTriangle className="w-3.5 h-3.5" />
-            <span>{formatNumber(overview!.daily_gap_kwh, 2)} kWh gap detected today</span>
-          </div>
-        </div>
-      )}
       <StatCard
         title="PV Power"
         value={formatNumber(totalPv, 0)}
