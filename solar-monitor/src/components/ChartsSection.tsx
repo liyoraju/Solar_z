@@ -12,7 +12,7 @@ import { Calendar, Clock, BarChart3, PieChart as PieIcon, Activity, ZoomIn, Zoom
 
 type ChartTab = 'hourly' | 'daily' | 'cycles' | 'production' | 'distribution';
 
-type ZoomLevel = '5sec' | '1min' | '5min' | '1hour' | '1day' | '1month';
+type ZoomLevel = '1min' | '1hour' | '1day';
 
 interface ZoomConfig {
   level: ZoomLevel;
@@ -26,38 +26,10 @@ interface ZoomConfig {
 
 const ZOOM_LEVELS: ZoomConfig[] = [
   {
-    level: '5sec',
-    interval: '5 second',
-    limit: 720,
-    label: '5s',
-    unit: 'W',
-    useDaily: false,
-    xFormat: (v: string) => {
-      try {
-        const d = new Date(v);
-        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      } catch { return v; }
-    },
-  },
-  {
     level: '1min',
     interval: '1 minute',
     limit: 480,
     label: '1m',
-    unit: 'W',
-    useDaily: false,
-    xFormat: (v: string) => {
-      try {
-        const d = new Date(v);
-        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-      } catch { return v; }
-    },
-  },
-  {
-    level: '5min',
-    interval: '5 minute',
-    limit: 288,
-    label: '5m',
     unit: 'W',
     useDaily: false,
     xFormat: (v: string) => {
@@ -86,20 +58,6 @@ const ZOOM_LEVELS: ZoomConfig[] = [
     interval: '1 day',
     limit: 60,
     label: '1d',
-    unit: 'kWh',
-    useDaily: true,
-    xFormat: (v: string) => {
-      try {
-        const d = new Date(v);
-        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      } catch { return v; }
-    },
-  },
-  {
-    level: '1month',
-    interval: '1 day',
-    limit: 90,
-    label: '1mo',
     unit: 'kWh',
     useDaily: true,
     xFormat: (v: string) => {
@@ -152,7 +110,7 @@ const CustomTooltip: React.FC<any> = ({ active, payload, label, unit = '' }) => 
 export const ChartsSection: React.FC = () => {
   const { themeColors, timeOfDay } = useTheme();
   const [activeTab, setActiveTab] = useState<ChartTab>('hourly');
-  const [zoomIndex, setZoomIndex] = useState(3);
+  const [zoomIndex, setZoomIndex] = useState(1);
   const [sliderIndex, setSliderIndex] = useState(0);
   const userInteracted = useRef(false);
   const dailyData = useHistory(14);
@@ -335,7 +293,7 @@ export const ChartsSection: React.FC = () => {
             {tabs.map((tab) => (
               <button
                 key={tab.key}
-                onClick={() => { setActiveTab(tab.key); if (tab.key !== 'hourly' && tab.key !== 'production') setZoomIndex(3); }}
+                onClick={() => { setActiveTab(tab.key); if (tab.key !== 'hourly' && tab.key !== 'production') setZoomIndex(1); }}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-300 whitespace-nowrap ${
                   activeTab === tab.key
                     ? `${themeColors.accentLight} ${themeColors.accent}`
