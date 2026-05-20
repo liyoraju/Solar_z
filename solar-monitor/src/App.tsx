@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ThemeProvider, useTheme, TimeOfDay, ThemeColors, themeLabels, themeIcons } from './hooks/useTheme';
 import { useCycleStatus } from './hooks/useApi';
 import { WeatherBackground } from './components/WeatherBackground';
@@ -13,6 +13,7 @@ import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { usePushNotifications } from './hooks/usePushNotifications';
 import { idbSave } from './services/offlineDB';
 import { getApiBaseUrl, setApiBaseUrl, apiFetch } from './services/apiConfig';
+import { App as CapacitorApp } from '@capacitor/app';
 
 type Tab = 'dashboard' | 'telemetry' | 'reports' | 'settings';
 
@@ -805,8 +806,24 @@ const useOfflinePrefetch = () => {
 const AppContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
   const { themeColors, timeOfDay } = useTheme();
+  const activeTabRef = useRef(activeTab);
   useOfflinePrefetch();
   usePushNotifications();
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handler = CapacitorApp.addListener('backButton', ({ canGoBack }) => {
+      if (activeTabRef.current !== 'dashboard') {
+        setActiveTab('dashboard');
+      } else {
+        CapacitorApp.exitApp();
+      }
+    });
+    return () => { handler.then(h => h.remove()); };
+  }, []);
 
   return (
     <div className={`h-screen overflow-y-auto overflow-x-hidden ${themeColors.bg} transition-colors duration-[2000ms]`} style={{ scrollbarGutter: 'stable' }}>
